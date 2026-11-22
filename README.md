@@ -59,7 +59,7 @@ owner-only and does not send anything to the group.
 
 ## Database migrations
 
-These form changes introduce no new migration. The database must already
+The poll and budget forms introduce no additional migration. The database must already
 have the repository’s existing migrations, including the exact-MMK and
 idempotency tables from `20261122181000_mini_app_exact_budget_amounts` and
 the draft states from `20261122190000_native_telegram_forms`. Check the
@@ -187,13 +187,17 @@ If an announcement's delivery is uncertain, the record stays in **Publication
 pending** to avoid retrying a send that Telegram may already have accepted.
 An operator must reconcile the group message and database status before retry.
 
+## Bill Splitter
+
+Create bills and review debts from the private bot menu. See the
+[Bill Splitter rollout, migration, and privacy guide](docs/BILL-SPLITTER.md).
+
 ## Other confirmed features
 
 1. Birthday Reminder
 2. Shared Memory Vault
 3. Plan Countdown
 4. One Tap Hangout
-5. Bill Splitter
 
 These remain scaffolds. Memory Vault is intended to let every current group
 member create albums, upload photos, view albums, and share memories without

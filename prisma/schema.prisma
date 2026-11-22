@@ -69,6 +69,9 @@ model Member {
   updatedAt           DateTime                 @updatedAt
   memberships         GroupMembership[]
   smartPolls          SmartPoll[]
+  createdBills        GroupBill[] @relation("BillCreator")
+  receivedBills       GroupBill[] @relation("BillReceiver")
+  billShares          GroupBillShare[]
   pollVotes           SmartPollVote[]
   budgetVotes         BudgetVote[]
   budgetBallots       BudgetVoteBallot[]
@@ -83,6 +86,7 @@ model TelegramGroup {
   createdAt       DateTime          @default(now())
   updatedAt       DateTime          @updatedAt
   memberships     GroupMembership[]
+  bills           GroupBill[]
   albums          MemoryAlbum[]
   smartPolls      SmartPoll[]
   budgetVotes     BudgetVote[]
@@ -296,4 +300,114 @@ model Hangout {
 
   @@unique([id, groupId])
   @@index([groupId, status, startsAt])
+}
+
+enum BillSplitMethod {
+  EQUAL
+  CUSTOM
+}
+
+enum BillDebtStatus {
+  UNPAID
+  PAY_LATER
+  PENDING_VERIFICATION
+  PAID
+}
+
+enum BillPaymentMethod {
+  TRANSFER
+  CASH
+}
+
+enum BillPaymentDecision {
+  PENDING
+  CONFIRMED
+  REJECTED
+}
+
+enum BillDeliveryStatus {
+  QUEUED
+  SENDING
+  SENT
+  FAILED
+  UNKNOWN
+}
+
+model GroupBill {
+  id         String          @id @default(cuid())
+  requestId  String          @unique @db.Uuid
+  requestHash String
+  groupId    BigInt
+  creatorId  BigInt
+  receiverId BigInt
+  receiverName String
+  title      String
+  totalMmk   BigInt
+  method     BillSplitMethod
+  createdAt  DateTime        @default(now())
+  group      TelegramGroup   @relation(fields: [groupId], references: [telegramId], onDelete: Restrict)
+  creator    Member          @relation("BillCreator", fields: [creatorId], references: [telegramId], onDelete: Restrict)
+  receiver   Member          @relation("BillReceiver", fields: [receiverId], references: [telegramId], onDelete: Restrict)
+  shares     GroupBillShare[]
+  delivery   BillDelivery?
+
+  @@index([groupId, createdAt, id])
+  @@index([creatorId, createdAt])
+  @@index([receiverId, createdAt])
+}
+
+model GroupBillShare {
+  id         String         @id @default(cuid())
+  billId     String
+  memberId   BigInt
+  memberName String
+  amountMmk  BigInt
+  status     BillDebtStatus
+  bill       GroupBill      @relation(fields: [billId], references: [id], onDelete: Restrict)
+  member     Member         @relation(fields: [memberId], references: [telegramId], onDelete: Restrict)
+  payments   BillPayment[]
+
+  @@unique([billId, memberId])
+  @@index([memberId, status, billId])
+}
+
+model BillPayment {
+  id             String              @id @default(cuid())
+  requestId      String              @unique @db.Uuid
+  requestHash    String
+  shareId        String
+  submittedBy    BigInt
+  method         BillPaymentMethod
+  previousStatus BillDebtStatus
+  decision       BillPaymentDecision @default(PENDING)
+  createdAt      DateTime            @default(now())
+  reviewedAt     DateTime?
+  reviewedBy     BigInt?
+  share          GroupBillShare      @relation(fields: [shareId], references: [id], onDelete: Restrict)
+  proof          BillPaymentProof?
+  delivery       BillDelivery?
+
+  @@index([shareId, createdAt])
+}
+
+model BillPaymentProof {
+  paymentId String      @id
+  image     Bytes
+  payment   BillPayment @relation(fields: [paymentId], references: [id], onDelete: Restrict)
+}
+
+model BillDelivery {
+  id                String             @id @default(cuid())
+  billId            String?            @unique
+  paymentId         String?            @unique
+  status            BillDeliveryStatus @default(QUEUED)
+  attempts          Int                @default(0)
+  attemptAt         DateTime?
+  telegramMessageId Int?
+  failureCode       Int?
+  nextAttemptAt     DateTime           @default(now())
+  bill              GroupBill?         @relation(fields: [billId], references: [id], onDelete: Restrict)
+  payment           BillPayment?       @relation(fields: [paymentId], references: [id], onDelete: Restrict)
+
+  @@index([status, nextAttemptAt])
 }

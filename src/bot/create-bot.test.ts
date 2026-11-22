@@ -156,6 +156,13 @@ describe('embedded Telegram form entry points', () => {
 
   it.each([
     [
+      'Bill Splitter',
+      'feature:bill-splitter',
+      'Bill Splitter',
+      'Create Bill',
+      'https://mini.example/mini-app/bills?view=create',
+    ],
+    [
       'Smart Poll',
       'feature:smart-poll',
       'Smart Poll',

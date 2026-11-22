@@ -112,3 +112,28 @@ button:disabled { opacity: 0.55; cursor: default; }
 
 .error { margin: 12px 0 0; color: var(--danger); font-size: 14px; }
 .success { margin: 0; text-align: center; font-weight: 700; }
+
+.bill-header { margin-bottom: 16px; }
+.bill-header h1 { margin-bottom: 8px; overflow-wrap: anywhere; }
+.bill-badge { display: table; margin: 0 0 10px; padding: 5px 9px; border: 1px solid var(--line); border-radius: 8px; font-size: 13px; }
+.bill-card { padding: 14px 16px; background: var(--surface); border: 1px solid var(--line); border-radius: 16px; margin-block: 12px; }
+.bill-card h2 { font-size: 17px; margin: 0 0 8px; }
+.bill-field { margin-bottom: 14px; }
+.bill-field > input, .bill-field > select { display: block; margin-top: 6px; }
+.bill-form select { width: 100%; min-height: 48px; border: 1px solid var(--line); border-radius: 11px; background: var(--surface); color: var(--ink); font: inherit; font-size: 16px; padding: 8px 10px; }
+.bill-members { margin-top: 18px; }
+.bill-member { padding: 6px 0; border-bottom: 1px solid var(--line); display: flex; gap: 6px 12px; align-items: center; flex-wrap: wrap; }
+.bill-choice { display: flex; align-items: center; gap: 9px; flex: 1 1 145px; min-height: 40px; margin: 0; overflow-wrap: anywhere; }
+.bill-choice input { width: 20px; min-width: 20px; min-height: 20px; margin: 0; accent-color: var(--accent); }
+.bill-member > input { flex: 1 0 105px; max-width: 155px; }
+.bill-muted { color: var(--muted); font-size: 14px; line-height: 1.42; overflow-wrap: anywhere; }
+.bill-actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0; }
+.bill-shell button:not(.primary-button) { padding: 8px 11px; border: 1px solid var(--line); }
+.bill-actions button[aria-pressed="true"] { background: var(--accent); color: var(--on-accent); }
+.bill-row + .bill-row { border-top: 1px solid var(--line); margin-top: 10px; padding-top: 10px; }
+.bill-row strong { overflow-wrap: anywhere; }
+.bill-row p { margin: 4px 0 8px; }
+.bill-payment-entry { display: grid; gap: 8px; margin: 8px 0 12px; }
+.bill-history { margin-block: 10px; }
+.bill-history summary { padding: 10px 0; cursor: pointer; font-weight: 650; }
+.bill-proof { width: 100%; height: auto; display: block; border-radius: 10px; }

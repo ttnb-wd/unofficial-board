@@ -10,6 +10,9 @@ import type { AppConfig } from '../config.js';
 import { verifyAndRecordMembership } from '../access/membership.js';
 import { hasPrelaunchAccess } from '../access/policy.js';
 import type { createLogger } from '../logger.js';
+import { handleBillAction } from '../features/bill-splitter/api.js';
+import { deliverBills } from '../features/bill-splitter/delivery.js';
+import { BillError, maxProofBytes } from '../features/bill-splitter/rules.js';
 import { validateTelegramInitData } from './init-data.js';
 import {
   budgetVoteSubmissionSchema,
@@ -73,7 +76,7 @@ function setHeaders(response: ServerResponse, contentType: string): void {
     'X-Content-Type-Options': 'nosniff',
     'Referrer-Policy': 'no-referrer',
     'Content-Security-Policy':
-      "default-src 'self'; script-src 'self' https://telegram.org; style-src 'self'; connect-src 'self'; img-src 'self' data:",
+      "default-src 'self'; script-src 'self' https://telegram.org; style-src 'self'; connect-src 'self'; img-src 'self' data: blob:",
   });
 }
 
@@ -88,14 +91,14 @@ function sendJson(
     'X-Content-Type-Options': 'nosniff',
     'Referrer-Policy': 'no-referrer',
     'Content-Security-Policy':
-      "default-src 'self'; script-src 'self' https://telegram.org; style-src 'self'; connect-src 'self'; img-src 'self' data:",
+      "default-src 'self'; script-src 'self' https://telegram.org; style-src 'self'; connect-src 'self'; img-src 'self' data: blob:",
   });
   response.end(JSON.stringify(value));
 }
 
-async function readJsonBody(request: IncomingMessage): Promise<unknown> {
+async function readJsonBody(request: IncomingMessage, maxBytes = MAX_BODY_BYTES): Promise<unknown> {
   const contentLength = Number(request.headers['content-length'] ?? 0);
-  if (contentLength > MAX_BODY_BYTES) {
+  if (contentLength > maxBytes) {
     throw new RangeError('Request body is too large.');
   }
   const chunks: Buffer[] = [];
@@ -103,7 +106,7 @@ async function readJsonBody(request: IncomingMessage): Promise<unknown> {
   for await (const chunk of request) {
     const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
     totalBytes += buffer.length;
-    if (totalBytes > MAX_BODY_BYTES) {
+    if (totalBytes > maxBytes) {
       throw new RangeError('Request body is too large.');
     }
     chunks.push(buffer);
@@ -481,10 +484,12 @@ async function saveBudgetVote(
 
 async function serveAsset(
   response: ServerResponse,
-  fileName: 'index.html' | 'app.css' | 'app.js' | 'config.js',
+  fileName: 'index.html' | 'app.css' | 'app.js' | 'config.js' | 'bills.html' | 'bills.js',
 ): Promise<void> {
   const contentTypes = {
     'index.html': 'text/html; charset=utf-8',
+    'bills.html': 'text/html; charset=utf-8',
+    'bills.js': 'text/javascript; charset=utf-8',
     'app.css': 'text/css; charset=utf-8',
     'app.js': 'text/javascript; charset=utf-8',
     'config.js': 'text/javascript; charset=utf-8',
@@ -519,22 +524,33 @@ export function createMiniAppServer(
   database: PrismaClient,
   telegram: Telegram,
   logger: ReturnType<typeof createLogger>,
+  botUsername?: string,
 ): {
   listen: () => Promise<void>;
   close: () => Promise<void>;
 } {
   const frontendOrigin = config.miniAppUrl ? new URL(config.miniAppUrl).origin : undefined;
+  let pendingDelivery: Promise<void> | undefined;
+  let deliveryTimer: NodeJS.Timeout | undefined;
+  let closing = false;
+  const kick = () => {
+    if (closing || pendingDelivery || !botUsername || config.accessMode !== 'LIVE') return;
+    pendingDelivery = deliverBills(database, telegram, config, botUsername)
+      .catch((error: unknown) => logger.warn({ errorName: errorName(error) }, 'Bill delivery worker failed'))
+      .finally(() => { pendingDelivery = undefined; });
+  };
   const server: Server = createServer((request, response) => {
     void (async () => {
       const url = new URL(request.url ?? '/', 'http://localhost');
       const feature = url.pathname === '/api/smart-polls' ? 'poll'
         : url.pathname === '/api/budget-votes' ? 'budget' : null;
+      const isBill = url.pathname === '/api/bills';
       const isHealth = url.pathname === '/healthz';
-      if ((feature || isHealth) && !allowApiOrigin(request, response, frontendOrigin)) {
+      if ((feature || isBill || isHealth) && !allowApiOrigin(request, response, frontendOrigin)) {
         sendJson(response, 403, { error: 'Origin is not allowed.' });
         return;
       }
-      if (request.method === 'OPTIONS' && feature) {
+      if (request.method === 'OPTIONS' && (feature || isBill)) {
         if (request.headers['access-control-request-method'] !== 'POST') {
           sendJson(response, 405, { error: 'Method is not allowed.' });
           return;
@@ -557,6 +573,12 @@ export function createMiniAppServer(
           case '/mini-app':
             await serveAsset(response, 'index.html');
             return;
+          case '/mini-app/bills':
+            await serveAsset(response, 'bills.html');
+            return;
+          case '/mini-app/bills.js':
+            await serveAsset(response, 'bills.js');
+            return;
           case '/mini-app/app.css':
             await serveAsset(response, 'app.css');
             return;
@@ -567,6 +589,39 @@ export function createMiniAppServer(
             await serveAsset(response, 'config.js');
             return;
         }
+      }
+      if (request.method === 'POST' && isBill) {
+        const identity = await authorizeRequest(request, config, database, telegram);
+        if (!identity) {
+          sendJson(response, 403, { error: 'Access could not be verified. Reopen Bill Splitter in the private bot chat.' });
+          return;
+        }
+        if (request.headers['content-type']?.split(';')[0] !== 'application/json') {
+          sendJson(response, 415, { error: 'JSON is required.' });
+          return;
+        }
+        let body: unknown;
+        try {
+          body = await readJsonBody(request, Math.ceil(maxProofBytes / 3) * 4 + MAX_BODY_BYTES);
+        } catch (error) {
+          sendJson(response, error instanceof RangeError ? 413 : 400, { error: 'The request could not be read.' });
+          return;
+        }
+        try {
+          const result = await handleBillAction(body, identity.userId, config, database, telegram, kick);
+          if (result instanceof Uint8Array) {
+            response.setHeader('Content-Disposition', 'inline; filename="payment-proof.jpg"');
+            response.setHeader('X-Robots-Tag', 'noindex, nofollow');
+            setHeaders(response, 'image/jpeg');
+            response.end(result);
+          } else {
+            sendJson(response, 200, result);
+          }
+        } catch (error) {
+          if (!(error instanceof BillError)) throw error;
+          sendJson(response, error.status, { error: error.message });
+        }
+        return;
       }
       if (request.method === 'POST' && feature) {
         await createSubmission(request, response, config, database, telegram, logger, feature);
@@ -592,11 +647,19 @@ export function createMiniAppServer(
         server.once('error', rejectListen);
         server.listen(config.miniAppPort ?? 3000, '0.0.0.0', () => {
           server.off('error', rejectListen);
+          closing = false;
+          if (botUsername && config.accessMode === 'LIVE') {
+            kick();
+            deliveryTimer = setInterval(kick, 15_000);
+            deliveryTimer.unref();
+          }
           resolveListen();
         });
       }),
-    close: () =>
-      new Promise((resolveClose, rejectClose) => {
+    close: async () => {
+      closing = true;
+      clearInterval(deliveryTimer);
+      await new Promise<void>((resolveClose, rejectClose) => {
         if (!server.listening) {
           resolveClose();
           return;
@@ -608,6 +671,8 @@ export function createMiniAppServer(
             resolveClose();
           }
         });
-      }),
+      });
+      await pendingDelivery;
+    },
   };
 }

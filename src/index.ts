@@ -21,6 +21,7 @@ async function main(): Promise<void> {
       database,
       bot.telegram,
       logger,
+      identity.username,
     );
     await miniAppServer.listen();
     logger.info(

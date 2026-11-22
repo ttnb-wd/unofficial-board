@@ -9,6 +9,7 @@ import { registerBudgetVoteHandlers } from '../features/group-budget-vote/bot.js
 import { findFeature, features } from '../features/index.js';
 import { registerSmartPollHandlers } from '../features/smart-poll/bot.js';
 import type { createLogger } from '../logger.js';
+import { registerBillMenus } from '../features/bill-splitter/bot.js';
 import { registerVoting } from './voting.js';
 import {
   dashboardKeyboard,
@@ -21,7 +22,7 @@ function errorName(error: unknown): string {
 }
 
 function dashboardText(): string {
-  return `The Unofficial Board\n\nChoose a feature to get started. Smart Poll and Group Budget Vote workflows are available; the other features remain Step 01 scaffolds.\n\n${features.map((feature) => `• ${feature.title}`).join('\n')}`;
+  return `The Unofficial Board\n\nChoose a feature to get started. Smart Poll, Group Budget Vote, and Bill Splitter are available.\n\n${features.map((feature) => `• ${feature.title}`).join('\n')}`;
 }
 
 export function createBot(
@@ -101,6 +102,7 @@ export function createBot(
     );
   });
 
+  registerBillMenus(bot, config, authorize);
   registerVoting(bot, config, database, botUsername, authorize);
 
   bot.start(async (ctx) => {
