@@ -1,0 +1,299 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum GroupMembershipStatus {
+  CREATOR
+  ADMINISTRATOR
+  MEMBER
+  RESTRICTED
+}
+
+enum SmartPollStatus {
+  DRAFT
+  PUBLISHING
+  OPEN
+  CLOSING
+  PRELAUNCH_PREVIEW
+  CLOSED
+  CANCELLED
+}
+
+enum BudgetVoteStatus {
+  DRAFT
+  PUBLISHING
+  OPEN
+  PRELAUNCH_OPEN
+  CLOSED
+  CANCELLED
+}
+
+enum BudgetDraftStep {
+  TITLE
+  RANGES
+  HANGOUT
+  READY
+  SAVED
+}
+
+enum SmartPollDraftStep {
+  QUESTION
+  OPTIONS
+  READY
+  EDIT_QUESTION
+  EDIT_OPTIONS
+  ADD_OPTION
+  SAVED
+}
+
+enum HangoutStatus {
+  OPEN
+  CANCELLED
+  COMPLETED
+}
+
+enum MiniAppSubmissionFeature {
+  SMART_POLL
+  BUDGET_VOTE
+}
+
+model Member {
+  telegramId          BigInt                   @id
+  isPrelaunchTest     Boolean                  @default(false)
+  createdAt           DateTime                 @default(now())
+  updatedAt           DateTime                 @updatedAt
+  memberships         GroupMembership[]
+  smartPolls          SmartPoll[]
+  pollVotes           SmartPollVote[]
+  budgetVotes         BudgetVote[]
+  budgetBallots       BudgetVoteBallot[]
+  budgetOptionBallots BudgetVoteOptionBallot[]
+  hangouts            Hangout[]
+  miniAppSubmissions  MiniAppSubmission[]
+}
+
+model TelegramGroup {
+  telegramId      BigInt            @id
+  isPrelaunchTest Boolean           @default(false)
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+  memberships     GroupMembership[]
+  albums          MemoryAlbum[]
+  smartPolls      SmartPoll[]
+  budgetVotes     BudgetVote[]
+  hangouts        Hangout[]
+}
+
+model GroupMembership {
+  groupId         BigInt
+  memberId        BigInt
+  status          GroupMembershipStatus
+  isPrelaunchTest Boolean               @default(false)
+  verifiedAt      DateTime              @default(now())
+  group           TelegramGroup         @relation(fields: [groupId], references: [telegramId], onDelete: Restrict)
+  member          Member                @relation(fields: [memberId], references: [telegramId], onDelete: Restrict)
+  albums          MemoryAlbum[]         @relation("AlbumCreator")
+  uploads         MemoryPhoto[]         @relation("PhotoUploader")
+
+  @@id([groupId, memberId])
+  @@index([memberId])
+  @@index([groupId, status])
+}
+
+model MemoryAlbum {
+  id                String          @id @default(cuid())
+  groupId           BigInt
+  createdByMemberId BigInt
+  title             String
+  isPrelaunchTest   Boolean         @default(false)
+  createdAt         DateTime        @default(now())
+  group             TelegramGroup   @relation(fields: [groupId], references: [telegramId], onDelete: Restrict)
+  creator           GroupMembership @relation("AlbumCreator", fields: [groupId, createdByMemberId], references: [groupId, memberId], onDelete: Restrict)
+  photos            MemoryPhoto[]
+
+  @@unique([id, groupId])
+  @@index([groupId, createdAt])
+}
+
+model MemoryPhoto {
+  id                   String          @id @default(cuid())
+  albumId              String
+  groupId              BigInt
+  uploadedByMemberId   BigInt
+  telegramFileId       String
+  telegramFileUniqueId String
+  caption              String?
+  mimeType             String?
+  isPrelaunchTest      Boolean         @default(false)
+  createdAt            DateTime        @default(now())
+  album                MemoryAlbum     @relation(fields: [albumId, groupId], references: [id, groupId], onDelete: Cascade)
+  uploader             GroupMembership @relation("PhotoUploader", fields: [groupId, uploadedByMemberId], references: [groupId, memberId], onDelete: Restrict)
+
+  @@index([albumId, createdAt])
+  @@index([groupId, uploadedByMemberId])
+  @@index([telegramFileUniqueId])
+}
+
+model SmartPoll {
+  id                    String             @id @default(cuid())
+  groupId               BigInt
+  creatorId             BigInt
+  question              String?
+  draftStep             SmartPollDraftStep @default(QUESTION)
+  allowsMultipleAnswers Boolean            @default(false)
+  isAnonymous           Boolean            @default(true)
+  status                SmartPollStatus    @default(DRAFT)
+  telegramPollId        String?            @unique
+  telegramMessageId     Int?
+  promptMessageId       Int?
+  totalVoterCount       Int                @default(0)
+  isPrelaunchTest       Boolean            @default(false)
+  createdAt             DateTime           @default(now())
+  updatedAt             DateTime           @updatedAt
+  closedAt              DateTime?
+  group                 TelegramGroup      @relation(fields: [groupId], references: [telegramId], onDelete: Restrict)
+  creator               Member             @relation(fields: [creatorId], references: [telegramId], onDelete: Restrict)
+  options               SmartPollOption[]
+  votes                 SmartPollVote[]
+
+  @@index([groupId, status, createdAt])
+  @@index([creatorId, status])
+}
+
+model SmartPollOption {
+  id       String          @id @default(cuid())
+  pollId   String
+  position Int
+  text     String
+  poll     SmartPoll       @relation(fields: [pollId], references: [id], onDelete: Cascade)
+  votes    SmartPollVote[]
+
+  @@unique([pollId, position])
+  @@unique([pollId, id])
+}
+
+model SmartPollVote {
+  pollId    String
+  memberId  BigInt
+  optionId  String
+  createdAt DateTime        @default(now())
+  poll      SmartPoll       @relation(fields: [pollId], references: [id], onDelete: Cascade)
+  member    Member          @relation(fields: [memberId], references: [telegramId], onDelete: Restrict)
+  option    SmartPollOption @relation(fields: [pollId, optionId], references: [pollId, id], onDelete: Cascade)
+
+  @@id([pollId, memberId, optionId])
+  @@index([pollId, optionId])
+}
+
+model BudgetVote {
+  id                String                   @id @default(cuid())
+  groupId           BigInt
+  creatorId         BigInt
+  title             String?
+  hangoutId         String?
+  status            BudgetVoteStatus         @default(DRAFT)
+  draftStep         BudgetDraftStep          @default(TITLE)
+  telegramMessageId Int?
+  promptMessageId   Int?
+  isPrelaunchTest   Boolean                  @default(false)
+  createdAt         DateTime                 @default(now())
+  updatedAt         DateTime                 @updatedAt
+  closedAt          DateTime?
+  group             TelegramGroup            @relation(fields: [groupId], references: [telegramId], onDelete: Restrict)
+  creator           Member                   @relation(fields: [creatorId], references: [telegramId], onDelete: Restrict)
+  hangout           Hangout?                 @relation(fields: [hangoutId, groupId], references: [id, groupId], onDelete: Restrict)
+  ranges            BudgetVoteRange[]
+  ballots           BudgetVoteBallot[]
+  options           BudgetVoteOption[]
+  optionBallots     BudgetVoteOptionBallot[]
+
+  @@index([groupId, status, createdAt])
+  @@index([creatorId, status])
+  @@index([hangoutId])
+}
+
+model BudgetVoteOption {
+  id           String                   @id @default(cuid())
+  budgetVoteId String
+  position     Int
+  amountMmk    BigInt
+  budgetVote   BudgetVote               @relation(fields: [budgetVoteId], references: [id], onDelete: Cascade)
+  ballots      BudgetVoteOptionBallot[]
+
+  @@unique([budgetVoteId, position])
+  @@unique([budgetVoteId, amountMmk])
+  @@unique([budgetVoteId, id])
+}
+
+model BudgetVoteOptionBallot {
+  budgetVoteId    String
+  memberId        BigInt
+  optionId        String
+  isPrelaunchTest Boolean          @default(false)
+  updatedAt       DateTime         @updatedAt
+  budgetVote      BudgetVote       @relation(fields: [budgetVoteId], references: [id], onDelete: Cascade)
+  member          Member           @relation(fields: [memberId], references: [telegramId], onDelete: Restrict)
+  option          BudgetVoteOption @relation(fields: [budgetVoteId, optionId], references: [budgetVoteId, id], onDelete: Restrict)
+
+  @@id([budgetVoteId, memberId])
+  @@index([budgetVoteId, optionId])
+}
+
+model BudgetVoteRange {
+  id           String             @id @default(cuid())
+  budgetVoteId String
+  position     Int
+  minMmk       BigInt
+  maxMmk       BigInt
+  budgetVote   BudgetVote         @relation(fields: [budgetVoteId], references: [id], onDelete: Cascade)
+  ballots      BudgetVoteBallot[]
+
+  @@unique([budgetVoteId, position])
+  @@unique([budgetVoteId, id])
+}
+
+model MiniAppSubmission {
+  requestId  String                   @id
+  feature    MiniAppSubmissionFeature
+  creatorId  BigInt
+  resourceId String
+  createdAt  DateTime                 @default(now())
+  creator    Member                   @relation(fields: [creatorId], references: [telegramId], onDelete: Restrict)
+
+  @@index([creatorId, createdAt])
+}
+
+model BudgetVoteBallot {
+  budgetVoteId    String
+  memberId        BigInt
+  rangeId         String
+  isPrelaunchTest Boolean         @default(false)
+  updatedAt       DateTime        @updatedAt
+  budgetVote      BudgetVote      @relation(fields: [budgetVoteId], references: [id], onDelete: Cascade)
+  member          Member          @relation(fields: [memberId], references: [telegramId], onDelete: Restrict)
+  range           BudgetVoteRange @relation(fields: [budgetVoteId, rangeId], references: [budgetVoteId, id], onDelete: Restrict)
+
+  @@id([budgetVoteId, memberId])
+  @@index([budgetVoteId, rangeId])
+}
+
+model Hangout {
+  id          String        @id @default(cuid())
+  groupId     BigInt
+  creatorId   BigInt
+  title       String
+  status      HangoutStatus @default(OPEN)
+  startsAt    DateTime?
+  createdAt   DateTime      @default(now())
+  group       TelegramGroup @relation(fields: [groupId], references: [telegramId], onDelete: Restrict)
+  creator     Member        @relation(fields: [creatorId], references: [telegramId], onDelete: Restrict)
+  budgetVotes BudgetVote[]
+
+  @@unique([id, groupId])
+  @@index([groupId, status, startsAt])
+}

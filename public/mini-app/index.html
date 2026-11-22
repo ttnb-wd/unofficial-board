@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <title>The Unofficial Board</title>
+    <link rel="stylesheet" href="/mini-app/app.css">
+    <script defer src="https://telegram.org/js/telegram-web-app.js"></script>
+    <script defer src="/mini-app/app.js"></script>
+  </head>
+  <body>
+    <main class="shell">
+      <h1 id="page-title">The Unofficial Board</h1>
+      <p id="launch-error" class="error" role="alert" hidden></p>
+      <form id="feature-form" novalidate hidden>
+        <fieldset id="fields">
+          <label id="question-label" for="question">Question</label>
+          <input id="question" type="text" autocomplete="off" required>
+          <fieldset class="choices-section">
+            <legend id="choices-title">Answers</legend>
+            <div id="choices" class="choice-list"></div>
+            <button id="add-choice" class="add-button" type="button">+ Add option</button>
+          </fieldset>
+        </fieldset>
+        <p id="form-error" class="error" role="alert" hidden></p>
+        <button id="done" class="primary-button" type="submit">Done</button>
+      </form>
+      <p id="success-message" class="success" role="status" tabindex="-1" hidden></p>
+    </main>
+  </body>
+</html>
