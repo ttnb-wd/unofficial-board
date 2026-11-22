@@ -1,0 +1,21 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": null,
+  "installCommand": "",
+  "buildCommand": "npm run build:vercel",
+  "outputDirectory": "dist-vercel",
+  "rewrites": [
+    { "source": "/mini-app", "destination": "/mini-app/index.html" }
+  ],
+  "headers": [
+    {
+      "source": "/mini-app(.*)",
+      "headers": [
+        { "key": "Content-Security-Policy", "value": "default-src 'self'; script-src 'self' https://telegram.org; style-src 'self'; connect-src 'self' https:; img-src 'self' data:; base-uri 'none'; object-src 'none'" },
+        { "key": "Referrer-Policy", "value": "no-referrer" },
+        { "key": "X-Content-Type-Options", "value": "nosniff" },
+        { "key": "Cache-Control", "value": "no-store" }
+      ]
+    }
+  ]
+}

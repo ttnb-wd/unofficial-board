@@ -1,0 +1,26 @@
+services:
+  - type: web
+    name: unofficial-board
+    runtime: node
+    plan: free
+    autoDeployTrigger: 'off'
+    buildCommand: npm ci --include=dev && npm run db:generate && npm run build
+    startCommand: npm start
+    healthCheckPath: /healthz
+    envVars:
+      - key: NODE_VERSION
+        value: 22.x
+      - key: ACCESS_MODE
+        value: PRELAUNCH
+      - key: SERVE_MINI_APP
+        value: 'false'
+      - key: MINI_APP_URL
+        sync: false
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: TELEGRAM_GROUP_ID
+        sync: false
+      - key: PRELAUNCH_OWNER_TELEGRAM_ID
+        sync: false
+      - key: DATABASE_URL
+        sync: false

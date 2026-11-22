@@ -90,6 +90,60 @@ describe('Mini App API', () => {
     }
   });
 
+  it('allows only the production browser origin in split hosting', async () => {
+    const port = await getFreePort();
+    const productionOrigin = 'https://board.example';
+    const server = createMiniAppServer(
+      { ...config, miniAppPort: port, miniAppUrl: productionOrigin, serveMiniApp: false },
+      {} as PrismaClient,
+      {} as Telegram,
+      createLogger('silent'),
+    );
+    await server.listen();
+    const base = `http://127.0.0.1:${port}`;
+    const preflight = (path: string, origin: string) => fetch(base + path, {
+      method: 'OPTIONS',
+      headers: {
+        Origin: origin,
+        'Access-Control-Request-Method': 'POST',
+        'Access-Control-Request-Headers': 'authorization,content-type',
+      },
+    });
+
+    try {
+      for (const path of ['/api/smart-polls', '/api/budget-votes']) {
+        const allowed = await preflight(path, productionOrigin);
+        expect(allowed.status).toBe(204);
+        expect(allowed.headers.get('access-control-allow-origin')).toBe(productionOrigin);
+        expect(allowed.headers.get('access-control-allow-headers')).toBe('Authorization, Content-Type');
+        expect(allowed.headers.get('vary')).toContain('Origin');
+
+        const rejected = await preflight(path, 'https://board-preview.example');
+        expect(rejected.status).toBe(403);
+        expect(rejected.headers.has('access-control-allow-origin')).toBe(false);
+
+        const unsigned = await fetch(base + path, { method: 'POST', headers: { Origin: productionOrigin } });
+        expect(unsigned.status).toBe(403);
+        expect(unsigned.headers.get('access-control-allow-origin')).toBe(productionOrigin);
+
+        const wrongOrigin = await fetch(base + path, {
+          method: 'POST',
+          headers: { Origin: 'null', Authorization: `tma ${signedInitData(42)}` },
+        });
+        expect(wrongOrigin.status).toBe(403);
+        expect(wrongOrigin.headers.has('access-control-allow-origin')).toBe(false);
+      }
+      const health = await fetch(base + '/healthz', { headers: { Origin: productionOrigin } });
+      expect(await health.json()).toEqual({ status: 'ok' });
+      expect(health.headers.get('access-control-allow-origin')).toBe(productionOrigin);
+      expect((await fetch(base + '/healthz')).status).toBe(200);
+      expect((await fetch(base + '/mini-app?feature=poll')).status).toBe(404);
+      expect((await fetch(base + '/mini-app/config.js')).status).toBe(404);
+    } finally {
+      await server.close();
+    }
+  });
+
   it('authenticates the PRELAUNCH owner and makes form submissions idempotent', async () => {
     const port = await getFreePort();
     const submissions = new Map<
@@ -156,6 +210,7 @@ describe('Mini App API', () => {
           method: 'POST',
           headers: {
             Authorization: `tma ${signedInitData(userId)}`,
+            Origin: `http://127.0.0.1:${port}`,
             'Content-Type': 'application/json',
           },
           body: JSON.stringify(body),

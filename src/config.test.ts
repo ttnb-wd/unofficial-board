@@ -57,6 +57,31 @@ describe('parseEnvironment', () => {
     ).toThrow(/MINI_APP_URL/);
   });
 
+  it('requires an HTTPS frontend origin when static serving is disabled', () => {
+    const renderEnvironment = {
+      TELEGRAM_BOT_TOKEN: 'test-token',
+      TELEGRAM_GROUP_ID: '-1001234567890',
+      PRELAUNCH_OWNER_TELEGRAM_ID: '42',
+      DATABASE_URL: 'postgresql://user:pass@localhost:5432/board',
+      SERVE_MINI_APP: 'false',
+      PORT: '10000',
+    };
+    expect(() => parseEnvironment(renderEnvironment)).toThrow(/MINI_APP_URL/);
+    expect(() => parseEnvironment({
+      ...renderEnvironment,
+      MINI_APP_URL: 'https://board.example/mini-app',
+    })).toThrow(/MINI_APP_URL/);
+    expect(parseEnvironment({
+      ...renderEnvironment,
+      MINI_APP_URL: 'https://board.example/',
+    })).toMatchObject({
+      accessMode: 'PRELAUNCH',
+      miniAppPort: 10000,
+      miniAppUrl: 'https://board.example/',
+      serveMiniApp: false,
+    });
+  });
+
   it('allows LIVE only when explicitly selected', () => {
     expect(
       parseEnvironment({

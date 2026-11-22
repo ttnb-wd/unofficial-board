@@ -1,4 +1,7 @@
 const webApp = window.Telegram?.WebApp;
+const apiOrigin = window.BOARD_API_ORIGIN ?? '';
+const wakeTimeoutMs = 75_000;
+const saveTimeoutMs = 50_000;
 const feature = new URLSearchParams(window.location.search).get('feature');
 const isBudget = feature === 'budget';
 const labels = isBudget
@@ -15,6 +18,7 @@ const error = document.querySelector('#form-error');
 const success = document.querySelector('#success-message');
 const maxMmk = 9_223_372_036_854_775_807n;
 let pendingBody;
+let saveAttempted = false;
 let saved = false;
 
 function refreshChoiceControls() {
@@ -143,6 +147,27 @@ function buildSubmission() {
   });
 }
 
+async function waitForApi() {
+  const signal = AbortSignal.timeout(wakeTimeoutMs);
+  while (!signal.aborted) {
+    try {
+      const response = await fetch(`${apiOrigin}/healthz`, {
+        cache: 'no-store',
+        credentials: 'omit',
+        redirect: 'error',
+        signal,
+      });
+      if (response.ok && (await response.json()).status === 'ok') return true;
+    } catch {
+      // Render's startup response may be HTML or omit CORS headers.
+    }
+    if (!signal.aborted) {
+      await new Promise((resolve) => window.setTimeout(resolve, 2500));
+    }
+  }
+  return false;
+}
+
 form.addEventListener('submit', async (event) => {
   event.preventDefault();
   if (done.disabled || saved) return;
@@ -152,10 +177,23 @@ form.addEventListener('submit', async (event) => {
   error.hidden = true;
   fields.disabled = true;
   done.disabled = true;
-  done.textContent = 'Saving…';
   try {
-    const response = await fetch(isBudget ? '/api/budget-votes' : '/api/smart-polls', {
+    if (apiOrigin) {
+      done.textContent = 'Connecting…';
+      if (!(await waitForApi())) {
+        showError('The server is still waking up. Tap Done to try again.');
+        return;
+      }
+    }
+    done.textContent = 'Saving…';
+    const endpoint = isBudget ? '/api/budget-votes' : '/api/smart-polls';
+    const wasAttempted = saveAttempted;
+    saveAttempted = true;
+    const response = await fetch(`${apiOrigin}${endpoint}`, {
       method: 'POST',
+      credentials: 'omit',
+      redirect: 'error',
+      signal: AbortSignal.timeout(saveTimeoutMs),
       headers: {
         'Content-Type': 'application/json',
         Authorization: `tma ${webApp.initData}`,
@@ -164,9 +202,14 @@ form.addEventListener('submit', async (event) => {
     });
     const result = await response.json();
     if (!response.ok) {
-      if (response.status < 500) pendingBody = undefined;
-      showError(result.error ?? 'Could not save. Try again.');
+      if (!wasAttempted && [400, 403, 413, 415].includes(response.status)) {
+        saveAttempted = false;
+      }
+      showError(result.error ?? 'Could not confirm the save. Tap Done to retry.');
       return;
+    }
+    if (typeof result.id !== 'string' || typeof result.created !== 'boolean') {
+      throw new Error('Unexpected save response.');
     }
     saved = true;
     form.hidden = true;
@@ -178,7 +221,8 @@ form.addEventListener('submit', async (event) => {
     showError('Could not confirm the save. Tap Done to retry.');
   } finally {
     if (!saved) {
-      fields.disabled = Boolean(pendingBody);
+      if (!saveAttempted) pendingBody = undefined;
+      fields.disabled = saveAttempted;
       done.disabled = false;
       done.textContent = 'Done';
     }

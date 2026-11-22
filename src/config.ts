@@ -33,14 +33,22 @@ const environmentSchema = z.object({
     z
       .string()
       .url()
-      .refine((value) => value.startsWith('https://'))
+      .refine((value) => {
+        const url = URL.parse(value);
+        return Boolean(
+          url?.protocol === 'https:' && !url.username && !url.password &&
+          value.replace(/\/$/, '') === url.origin,
+        );
+      })
       .optional(),
   ),
+  SERVE_MINI_APP: z.enum(['true', 'false']).default('true'),
   MINI_APP_PORT: z.coerce.number().int().min(1).max(65_535).default(3000),
   LOG_LEVEL: z
     .enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent'])
     .default('info'),
-});
+}).refine(({ MINI_APP_URL, SERVE_MINI_APP }) =>
+  SERVE_MINI_APP === 'true' || Boolean(MINI_APP_URL), { path: ['MINI_APP_URL'] });
 
 export type AppConfig = {
   botToken: string;
@@ -50,6 +58,7 @@ export type AppConfig = {
   databaseUrl: string;
   miniAppUrl?: string;
   miniAppPort?: number;
+  serveMiniApp?: boolean;
   logLevel: z.infer<typeof environmentSchema>['LOG_LEVEL'];
 };
 
@@ -102,6 +111,7 @@ export function parseEnvironment(environment: NodeJS.ProcessEnv): AppConfig {
       ? { miniAppUrl: parsed.data.MINI_APP_URL }
       : {}),
     miniAppPort: parsed.data.MINI_APP_PORT,
+    ...(parsed.data.SERVE_MINI_APP === 'false' ? { serveMiniApp: false } : {}),
     logLevel: parsed.data.LOG_LEVEL,
   };
 }

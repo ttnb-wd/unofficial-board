@@ -525,16 +525,37 @@ function formatMmk(amount: bigint): string {
 
 async function serveAsset(
   response: ServerResponse,
-  fileName: 'index.html' | 'app.css' | 'app.js',
+  fileName: 'index.html' | 'app.css' | 'app.js' | 'config.js',
 ): Promise<void> {
   const contentTypes = {
     'index.html': 'text/html; charset=utf-8',
     'app.css': 'text/css; charset=utf-8',
     'app.js': 'text/javascript; charset=utf-8',
+    'config.js': 'text/javascript; charset=utf-8',
   };
   const content = await readFile(resolve(ASSET_DIRECTORY, fileName));
   setHeaders(response, contentTypes[fileName]);
   response.end(content);
+}
+
+function allowApiOrigin(
+  request: IncomingMessage,
+  response: ServerResponse,
+  frontendOrigin: string | undefined,
+): boolean {
+  response.setHeader('Vary', 'Origin');
+  const origin = request.headers.origin;
+  if (!origin) return request.method !== 'OPTIONS';
+  if (origin === frontendOrigin) {
+    response.setHeader('Access-Control-Allow-Origin', origin);
+    return true;
+  }
+  // With no public frontend configured, the development server serves both sides.
+  const host = request.headers.host;
+  return !frontendOrigin && request.method !== 'OPTIONS' && Boolean(
+    host && /^(localhost|127\.0\.0\.1|\[::1\])(?::\d+)?$/.test(host) &&
+    origin === `http://${host}`,
+  );
 }
 
 export function createMiniAppServer(
@@ -546,50 +567,53 @@ export function createMiniAppServer(
   listen: () => Promise<void>;
   close: () => Promise<void>;
 } {
+  const frontendOrigin = config.miniAppUrl ? new URL(config.miniAppUrl).origin : undefined;
   const server: Server = createServer((request, response) => {
     void (async () => {
       const url = new URL(request.url ?? '/', 'http://localhost');
-      if (request.method === 'GET' && url.pathname === '/healthz') {
+      const feature = url.pathname === '/api/smart-polls' ? 'poll'
+        : url.pathname === '/api/budget-votes' ? 'budget' : null;
+      const isHealth = url.pathname === '/healthz';
+      if ((feature || isHealth) && !allowApiOrigin(request, response, frontendOrigin)) {
+        sendJson(response, 403, { error: 'Origin is not allowed.' });
+        return;
+      }
+      if (request.method === 'OPTIONS' && feature) {
+        if (request.headers['access-control-request-method'] !== 'POST') {
+          sendJson(response, 405, { error: 'Method is not allowed.' });
+          return;
+        }
+        response.writeHead(204, {
+          'Access-Control-Allow-Methods': 'POST',
+          'Access-Control-Allow-Headers': 'Authorization, Content-Type',
+          'Access-Control-Max-Age': '600',
+          Vary: 'Origin, Access-Control-Request-Method, Access-Control-Request-Headers',
+        });
+        response.end();
+        return;
+      }
+      if (request.method === 'GET' && isHealth) {
         sendJson(response, 200, { status: 'ok' });
         return;
       }
-      if (request.method === 'GET' && url.pathname === '/mini-app') {
-        await serveAsset(response, 'index.html');
-        return;
+      if (request.method === 'GET' && config.serveMiniApp !== false) {
+        switch (url.pathname) {
+          case '/mini-app':
+            await serveAsset(response, 'index.html');
+            return;
+          case '/mini-app/app.css':
+            await serveAsset(response, 'app.css');
+            return;
+          case '/mini-app/app.js':
+            await serveAsset(response, 'app.js');
+            return;
+          case '/mini-app/config.js':
+            await serveAsset(response, 'config.js');
+            return;
+        }
       }
-      if (request.method === 'GET' && url.pathname === '/mini-app/app.css') {
-        await serveAsset(response, 'app.css');
-        return;
-      }
-      if (request.method === 'GET' && url.pathname === '/mini-app/app.js') {
-        await serveAsset(response, 'app.js');
-        return;
-      }
-      if (request.method === 'POST' && url.pathname === '/api/smart-polls') {
-        await createSubmission(
-          request,
-          response,
-          config,
-          database,
-          telegram,
-          logger,
-          'poll',
-        );
-        return;
-      }
-      if (
-        request.method === 'POST' &&
-        url.pathname === '/api/budget-votes'
-      ) {
-        await createSubmission(
-          request,
-          response,
-          config,
-          database,
-          telegram,
-          logger,
-          'budget',
-        );
+      if (request.method === 'POST' && feature) {
+        await createSubmission(request, response, config, database, telegram, logger, feature);
         return;
       }
       sendJson(response, 404, { error: 'Not found.' });

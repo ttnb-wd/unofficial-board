@@ -29,8 +29,9 @@ Set these values in the existing `.env` file:
 - `ACCESS_MODE=PRELAUNCH`: keep this explicit during private testing. The
   application also defaults to PRELAUNCH if the setting is omitted.
 - `DATABASE_URL`: the existing Neon connection URL with TLS enabled.
-- `MINI_APP_URL`: the public HTTPS origin serving the embedded form, for
-  example `https://forms.example.com`. Leave it unset until hosting is ready.
+- `MINI_APP_URL`: the HTTPS tunnel origin for local Telegram testing. Leave
+  it unset for same-origin HTTP development on loopback.
+- `SERVE_MINI_APP=true`: the default, which serves the forms locally.
 - `MINI_APP_PORT=3000`: the local port for the Mini App server; configure the
   host or reverse proxy to forward requests to this port.
 - `LOG_LEVEL=info`: optional.
@@ -67,40 +68,73 @@ pending, review them and verify Neon recovery coverage before running
 `npm run db:migrate` once as a separate release step. Existing range-based
 votes and native form records are retained.
 
-## Koyeb HTTPS deployment
+## Render and Vercel deployment
 
-After deployment approval:
+Render runs the Telegraf bot and API. Vercel serves the static Mini App. The
+API continues to use the existing Neon database. Migrations run separately.
 
-1. Provide Koyeb with a source repository or source archive containing the
-   project, including `public/`, `prisma/`, and the npm lockfile. Keep
-   `.env` outside the deployment source.
-2. Create one Node.js **Web Service** with the buildpack and Node.js 22 or
-   later. Set the custom build command to
-   `npm run db:generate && npm run build` and the run command to `npm start`.
-3. Expose HTTP port `3000` at route `/` and configure the HTTP health check
-   at `/healthz`. Set `PORT=3000` and leave `MINI_APP_PORT` unset or set it
-   to the same value. Configure one always-on instance in one region. The
-   bot uses Telegram long polling, so stop any other process using the same
-   bot token before switching traffic. The existing birthday and countdown
-   features are scaffolds and these two forms have no scheduler jobs.
-4. Set `ACCESS_MODE=PRELAUNCH`, `PRELAUNCH_OWNER_TELEGRAM_ID`,
-   `TELEGRAM_GROUP_ID`, and the existing `TELEGRAM_BOT_TOKEN` and
-   `DATABASE_URL` secrets. Set `MINI_APP_URL` to the public HTTPS origin
-   shown by Koyeb, such as `https://<app>.koyeb.app`. Run the migration
-   status check against that same Neon database and resolve any pending
-   migrations before using the forms.
-5. Verify HTTPS `/healthz` and both `/mini-app?feature=...` routes. As the
-   configured owner, open a fresh dashboard in the bot’s private chat,
-   submit one of each form, confirm it closes after showing success, and
-   verify the saved entries using **My polls** and **My budget votes**.
+| Setting | Render Free Web Service | Vercel Hobby |
+| --- | --- | --- |
+| Source | Repository root, `render.yaml` | Repository root, `vercel.json` |
+| Runtime or preset | Node.js 22 | Other, Node.js 22 for builds |
+| Install and build | `npm ci --include=dev && npm run db:generate && npm run build` | Skip install, then `npm run build:vercel` |
+| Start | `npm start` | Static output in `dist-vercel` |
+| Health or form route | `GET /healthz` | `/mini-app?feature=poll` and `/mini-app?feature=budget` |
 
-Telegram’s inline Mini App launch button is available in private bot chats.
-This flow uses the HTTPS URL on each inline button. It needs no separate
-BotFather menu button, named Mini App, or chat message containing form data.
-The app accepts Telegram’s signed launch data for five minutes, after which
-the owner can reopen the form from the bot. See [Telegram Mini Apps](https://core.telegram.org/bots/webapps),
-[Koyeb deployment](https://www.koyeb.com/docs/build-and-deploy), and
-[Koyeb health checks](https://www.koyeb.com/docs/run-and-scale/health-checks).
+**Render variables**
+
+- Set `TELEGRAM_BOT_TOKEN`, `TELEGRAM_GROUP_ID`, `PRELAUNCH_OWNER_TELEGRAM_ID`,
+  and `DATABASE_URL` to the existing values.
+- The Blueprint sets `ACCESS_MODE=PRELAUNCH`, `SERVE_MINI_APP=false`, and
+  `NODE_VERSION=22.x`. Leave `MINI_APP_PORT` unset so the server uses Render's
+  `PORT`. `LOG_LEVEL` defaults to `info`.
+- Set `MINI_APP_URL` to the canonical Vercel production HTTPS origin,
+  without a path. Render uses it for both Create buttons and the API's
+  exact-origin CORS allowlist.
+
+**Vercel variable**
+
+- Set `MINI_APP_API_ORIGIN` for **Production** to the Render HTTPS origin,
+  without a path. The build writes it into public `config.js`. Telegram
+  and database credentials belong in Render.
+
+**Approved rollout**
+
+1. Publish the approved commit to the GitHub branch selected for deployment.
+   Confirm the existing Neon migration status from a trusted shell with
+   `npm run db:migrate:status`. Handle any pending existing migrations as
+   a separate approved database step before using the forms.
+2. Create a Render Blueprint from `render.yaml`, or configure the existing
+   Free Web Service with the settings above. Set `MINI_APP_URL` to the planned
+   Vercel production origin. Stop any other poller using this bot token
+   before starting Render. Confirm that the token is ready for polling,
+   since Telegraf clears any prior webhook when it starts polling. Check
+   that Render's HTTPS `/healthz` returns `{"status":"ok"}`.
+3. Import the same repository into Vercel Hobby. Use the repository root,
+   the **Other** preset, and Node.js 22. Set `MINI_APP_API_ORIGIN` to the
+   Render origin and deploy to Production. Copy the stable Vercel production
+   origin. If it differs from the planned value, update `MINI_APP_URL` on
+   Render and redeploy Render before opening the forms.
+4. Check that a POST preflight to either Render API endpoint from the Vercel
+   origin returns 204 with a matching `Access-Control-Allow-Origin`.
+   Confirm a preview origin is rejected. In the owner's private Telegram
+   chat, open a fresh `/start` dashboard, submit both forms, and verify the
+   records under **My polls** and **My budget votes**.
+
+**Render Free behavior**
+
+Render Free sleeps after 15 minutes without inbound traffic. Outbound
+Telegram polling cannot wake it. If the bot sleeps and does not answer
+`/start`, open the Render HTTPS `/healthz` URL and retry in Telegram after
+it responds. The Vercel form waits for API health before sending a save.
+An interrupted save can be retried with the same submission ID while the
+form remains open. If the Telegram session has expired, check saved items
+before reopening to retry. [Render Free](https://render.com/docs/free)
+
+Telegram inline Mini App buttons launch from a private bot chat. This
+flow needs no separate BotFather menu button or named Mini App. Signed
+Telegram launch data expires after five minutes.
+[Telegram Mini Apps](https://core.telegram.org/bots/webapps)
 
 ## Access lifecycle
 
@@ -112,7 +146,7 @@ the owner can reopen the form from the bot. See [Telegram Mini Apps](https://cor
 - Both modes preserve resource ownership checks for future personal-data
   changes and deletion operations.
 
-Never enable LIVE automatically. The bot has not been deployed.
+Never enable LIVE automatically.
 
 ## Embedded private-chat forms
 
