@@ -12,6 +12,8 @@ import { hasPrelaunchAccess } from '../access/policy.js';
 import type { createLogger } from '../logger.js';
 import { handleBillAction } from '../features/bill-splitter/api.js';
 import { deliverBills } from '../features/bill-splitter/delivery.js';
+import { handleBirthdayAction } from '../features/birthday-reminder/api.js';
+import { deliverBirthdays } from '../features/birthday-reminder/delivery.js';
 import { BillError, maxProofBytes } from '../features/bill-splitter/rules.js';
 import { validateTelegramInitData } from './init-data.js';
 import {
@@ -484,12 +486,14 @@ async function saveBudgetVote(
 
 async function serveAsset(
   response: ServerResponse,
-  fileName: 'index.html' | 'app.css' | 'app.js' | 'config.js' | 'bills.html' | 'bills.js',
+  fileName: 'index.html' | 'app.css' | 'app.js' | 'config.js' | 'bills.html' | 'bills.js' | 'birthday.html' | 'birthday.js',
 ): Promise<void> {
   const contentTypes = {
     'index.html': 'text/html; charset=utf-8',
     'bills.html': 'text/html; charset=utf-8',
     'bills.js': 'text/javascript; charset=utf-8',
+    'birthday.html': 'text/html; charset=utf-8',
+    'birthday.js': 'text/javascript; charset=utf-8',
     'app.css': 'text/css; charset=utf-8',
     'app.js': 'text/javascript; charset=utf-8',
     'config.js': 'text/javascript; charset=utf-8',
@@ -532,6 +536,8 @@ export function createMiniAppServer(
   const frontendOrigin = config.miniAppUrl ? new URL(config.miniAppUrl).origin : undefined;
   let pendingDelivery: Promise<void> | undefined;
   let deliveryTimer: NodeJS.Timeout | undefined;
+  let pendingBirthdayDelivery: Promise<void> | undefined;
+  let birthdayTimer: NodeJS.Timeout | undefined;
   let closing = false;
   const kick = () => {
     if (closing || pendingDelivery || !botUsername || config.accessMode !== 'LIVE') return;
@@ -539,18 +545,25 @@ export function createMiniAppServer(
       .catch((error: unknown) => logger.warn({ errorName: errorName(error) }, 'Bill delivery worker failed'))
       .finally(() => { pendingDelivery = undefined; });
   };
+  const kickBirthdays = () => {
+    if (closing || pendingBirthdayDelivery || config.accessMode !== 'LIVE') return;
+    pendingBirthdayDelivery = deliverBirthdays(database, telegram, config)
+      .catch((error: unknown) => logger.warn({ errorName: errorName(error) }, 'Birthday delivery worker failed'))
+      .finally(() => { pendingBirthdayDelivery = undefined; });
+  };
   const server: Server = createServer((request, response) => {
     void (async () => {
       const url = new URL(request.url ?? '/', 'http://localhost');
       const feature = url.pathname === '/api/smart-polls' ? 'poll'
         : url.pathname === '/api/budget-votes' ? 'budget' : null;
       const isBill = url.pathname === '/api/bills';
+      const isBirthday = url.pathname === '/api/birthdays';
       const isHealth = url.pathname === '/healthz';
-      if ((feature || isBill || isHealth) && !allowApiOrigin(request, response, frontendOrigin)) {
+      if ((feature || isBill || isBirthday || isHealth) && !allowApiOrigin(request, response, frontendOrigin)) {
         sendJson(response, 403, { error: 'Origin is not allowed.' });
         return;
       }
-      if (request.method === 'OPTIONS' && (feature || isBill)) {
+      if (request.method === 'OPTIONS' && (feature || isBill || isBirthday)) {
         if (request.headers['access-control-request-method'] !== 'POST') {
           sendJson(response, 405, { error: 'Method is not allowed.' });
           return;
@@ -579,6 +592,12 @@ export function createMiniAppServer(
           case '/mini-app/bills.js':
             await serveAsset(response, 'bills.js');
             return;
+          case '/mini-app/birthday':
+            await serveAsset(response, 'birthday.html');
+            return;
+          case '/mini-app/birthday.js':
+            await serveAsset(response, 'birthday.js');
+            return;
           case '/mini-app/app.css':
             await serveAsset(response, 'app.css');
             return;
@@ -589,6 +608,27 @@ export function createMiniAppServer(
             await serveAsset(response, 'config.js');
             return;
         }
+      }
+      if (request.method === 'POST' && isBirthday) {
+        const identity = await authorizeRequest(request, config, database, telegram);
+        if (!identity) {
+          sendJson(response, 403, { error: 'Access could not be verified. Reopen Birthday Reminder from the private bot chat.' });
+          return;
+        }
+        if (request.headers['content-type']?.split(';')[0] !== 'application/json') {
+          sendJson(response, 415, { error: 'JSON is required.' });
+          return;
+        }
+        let body: unknown;
+        try {
+          body = await readJsonBody(request);
+        } catch (error) {
+          sendJson(response, error instanceof RangeError ? 413 : 400, { error: 'The request could not be read.' });
+          return;
+        }
+        const result = await handleBirthdayAction(body, identity.userId, config, database, telegram);
+        sendJson(response, result.status, result.body);
+        return;
       }
       if (request.method === 'POST' && isBill) {
         const identity = await authorizeRequest(request, config, database, telegram);
@@ -653,12 +693,18 @@ export function createMiniAppServer(
             deliveryTimer = setInterval(kick, 15_000);
             deliveryTimer.unref();
           }
+          if (config.accessMode === 'LIVE') {
+            kickBirthdays();
+            birthdayTimer = setInterval(kickBirthdays, 60_000);
+            birthdayTimer.unref();
+          }
           resolveListen();
         });
       }),
     close: async () => {
       closing = true;
       clearInterval(deliveryTimer);
+      clearInterval(birthdayTimer);
       await new Promise<void>((resolveClose, rejectClose) => {
         if (!server.listening) {
           resolveClose();
@@ -673,6 +719,7 @@ export function createMiniAppServer(
         });
       });
       await pendingDelivery;
+      await pendingBirthdayDelivery;
     },
   };
 }

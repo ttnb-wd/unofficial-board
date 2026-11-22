@@ -411,3 +411,36 @@ model BillDelivery {
 
   @@index([status, nextAttemptAt])
 }
+
+model Birthday {
+  groupId   BigInt
+  memberId  BigInt
+  preview   Boolean
+  month     Int
+  day       Int
+
+  @@id([groupId, memberId, preview])
+  @@index([groupId, preview, month, day])
+}
+
+enum BirthdayDeliveryStatus {
+  QUEUED
+  SENDING
+  SENT
+  FAILED
+  UNKNOWN
+}
+
+model BirthdayDelivery {
+  groupId           BigInt
+  memberId          BigInt
+  year              Int
+  status            BirthdayDeliveryStatus @default(QUEUED)
+  attempts          Int                    @default(0)
+  nextAttemptAt     DateTime               @default(now())
+  attemptAt         DateTime?
+  telegramMessageId Int?
+
+  @@id([groupId, memberId, year])
+  @@index([groupId, status, nextAttemptAt])
+}

@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en" data-feature="birthday-reminder">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
+    <title>Birthday Reminder · The Unofficial Board</title>
+    <link rel="stylesheet" href="/mini-app/app.css">
+    <script defer src="https://telegram.org/js/telegram-web-app.js"></script>
+    <script defer src="/mini-app/config.js"></script>
+    <script defer src="/mini-app/birthday.js"></script>
+  </head>
+  <body>
+    <main class="shell">
+      <header class="feature-hero">
+        <p id="birthday-preview" class="bill-badge" hidden>PRELAUNCH · Simulation</p>
+        <h1 id="birthday-title">Birthday Reminder</h1>
+      </header>
+      <p id="birthday-status" class="success" role="status" hidden></p>
+      <p id="birthday-error" class="error" role="alert" hidden></p>
+      <form id="birthday-form" hidden>
+        <p class="birthday-hint">Share your month and day with the group.</p>
+        <fieldset id="birthday-fields" class="birthday-picker">
+          <label for="birthday-month">Month</label>
+          <select id="birthday-month" required></select>
+          <label for="birthday-day">Day</label>
+          <select id="birthday-day" required></select>
+        </fieldset>
+        <button id="birthday-save" class="primary-button" type="submit">Save</button>
+        <button id="birthday-remove" class="danger-button birthday-remove" type="button" hidden>Remove My Birthday</button>
+      </form>
+      <section id="birthday-content" class="bill-card" hidden></section>
+      <nav class="bill-actions" aria-label="Navigation">
+        <button id="birthday-retry" type="button" hidden>Try Again</button>
+        <button id="birthday-back" type="button">Back</button>
+      </nav>
+    </main>
+  </body>
+</html>

@@ -192,12 +192,17 @@ An operator must reconcile the group message and database status before retry.
 Create bills and review debts from the private bot menu. See the
 [Bill Splitter rollout, migration, and privacy guide](docs/BILL-SPLITTER.md).
 
+## Birthday Reminder
+
+Save or remove your birthday from the private bot menu and see upcoming group
+birthdays. See the [Birthday Reminder guide](docs/BIRTHDAY-REMINDER.md) for
+PRELAUNCH previews, migration, and delivery recovery.
+
 ## Other confirmed features
 
-1. Birthday Reminder
-2. Shared Memory Vault
-3. Plan Countdown
-4. One Tap Hangout
+1. Shared Memory Vault
+2. Plan Countdown
+3. One Tap Hangout
 
 These remain scaffolds. Memory Vault is intended to let every current group
 member create albums, upload photos, view albums, and share memories without

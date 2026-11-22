@@ -86,6 +86,31 @@ describe('PRELAUNCH bot access', () => {
     vi.restoreAllMocks();
   });
 
+  it('opens Birthday Reminder directly as an owner-only Mini App', async () => {
+    const findUnique = vi.fn().mockResolvedValueOnce(null).mockResolvedValueOnce({ day: 29 });
+    const database = { birthday: { findUnique } } as unknown as PrismaClient;
+    const { bot, apiCall, membershipCheck } = setupBot(database);
+    await bot.handleUpdate(callbackUpdate(73, 'feature:birthday-reminder'));
+    expect(findUnique).not.toHaveBeenCalled();
+    await bot.handleUpdate(callbackUpdate(42, 'feature:birthday-reminder'));
+    await bot.handleUpdate(callbackUpdate(42, 'feature:birthday-reminder'));
+    const edits = apiCall.mock.calls.filter(([method]) => method === 'editMessageText');
+    const button = (text: string, view: string) => ({ text, web_app: { url: `https://mini.example/mini-app/birthday?view=${view}` } });
+    expect(edits[0]?.[1]).toMatchObject({ reply_markup: { inline_keyboard: [
+      [button('Add My Birthday', 'form')],
+      [button('Upcoming Birthdays', 'upcoming')],
+      [button('Preview Group Announcement', 'preview')],
+      [{ text: 'Back' }, { text: 'Main Menu' }],
+    ] } });
+    expect(edits[1]?.[1]).toMatchObject({ reply_markup: { inline_keyboard: [
+      [button('Edit My Birthday', 'form')],
+      [button('Upcoming Birthdays', 'upcoming')],
+      [button('Preview Group Announcement', 'preview')],
+      [{ text: 'Back' }, { text: 'Main Menu' }],
+    ] } });
+    expect(membershipCheck).not.toHaveBeenCalled();
+  });
+
   it('lets the configured owner use the private dashboard without checking group membership', async () => {
     const { bot, database, apiCall, membershipCheck } = setupBot();
 
@@ -334,7 +359,8 @@ describe('creator and member voting', () => {
   });
 
   it('gives all seven menus dashboard navigation', async () => {
-    const { bot, apiCall } = setupBot();
+    const db = { birthday: { findUnique: vi.fn().mockResolvedValue(null) } } as unknown as PrismaClient;
+    const { bot, apiCall } = setupBot(db);
     for (const id of ['smart-poll', 'group-budget-vote', 'bill-splitter', 'one-tap-hangout',
       'shared-memory-vault', 'plan-countdown', 'birthday-reminder']) {
       await bot.handleUpdate(callbackUpdate(42, `feature:${id}`));
