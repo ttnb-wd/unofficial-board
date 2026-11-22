@@ -69,6 +69,7 @@ async function run(work) {
   if (busy) return;
   busy = true;
   content.inert = true;
+  content.setAttribute('aria-busy', 'true');
   nav.inert = true;
   message(error);
   try {
@@ -89,6 +90,7 @@ function screen(title, ...nodes) {
   content.replaceChildren(...nodes);
   nav.replaceChildren(button('Back', back), button('Close', () => telegram.close()));
   nav.hidden = false;
+  heading.focus({ preventScroll: true });
   window.scrollTo(0, 0);
 }
 
@@ -118,7 +120,7 @@ function row(title, meta) {
 }
 
 function numeric() {
-  const input = el('input');
+  const input = el('input', '', 'amount-input');
   input.inputMode = 'numeric';
   input.maxLength = 19;
   input.placeholder = '0';
@@ -190,6 +192,7 @@ async function create() {
     return { ...member, check, share, estimate };
   });
   const summary = el('p', '', 'bill-muted');
+  summary.classList.add('bill-allocation');
   summary.setAttribute('aria-live', 'polite');
   function allocation(strict = false) {
     const selected = checks.filter((member) => member.check.checked)
@@ -256,7 +259,7 @@ async function create() {
   form.append(field('Bill title', title), field('Total MMK', total), field('Who paid?', payer), field('Split method', method),
     members, summary, submit);
   refresh();
-  screen('Create Bill', roster.length ? form : el('p', 'No eligible members are registered.'));
+  screen('Create Bill', roster.length ? form : el('p', 'No eligible members are registered.', 'bill-card bill-muted'));
 }
 
 function ledgerViews(selected) {
@@ -409,7 +412,7 @@ function paymentActions(container, bill, share) {
     const reviewActions = el('div', '', 'bill-actions');
     if (payment.hasProof) reviewActions.append(button('View Proof', () => run(async () => {
       if (session.preview) {
-        screen('Proof preview', el('p', 'Simulated receipt. No image was captured or stored.'));
+        screen('Proof preview', el('p', 'Simulated receipt. No image was captured or stored.', 'bill-card bill-muted'));
       } else {
         const blob = await request('proof', { payment: payment.id }, true);
         screen('Private payment proof');
@@ -425,7 +428,7 @@ function paymentActions(container, bill, share) {
       reviewActions.append(button('Confirm Received', () => run(() =>
         change('review', { payment: payment.id, decision: 'CONFIRMED' }, 'Payment confirmed.'))),
       button('Request Correction', () => run(() =>
-        change('review', { payment: payment.id, decision: 'REJECTED' }, 'Correction requested.'))));
+        change('review', { payment: payment.id, decision: 'REJECTED' }, 'Correction requested.')), 'danger-button'));
     }
     review.append(reviewActions);
     history.append(review);
@@ -466,7 +469,10 @@ async function detail(id) {
   const sampleDebtor = bill.shares.find((share) => share.debtorId === session.actor && share.debtorId !== bill.receiverId && share.amount !== '0')
     ?? bill.shares.find((share) => share.debtorId !== bill.receiverId && share.amount !== '0');
   for (const share of bill.shares) {
-    const shareRow = row(share.debtor, `${amount(share.amount)} · ${statuses[share.status]} · ${amount(share.status === 'PAID' ? '0' : share.amount)} outstanding`);
+    const shareRow = row(share.debtor, `${amount(share.amount)} · ${amount(share.status === 'PAID' ? '0' : share.amount)} outstanding`);
+    const status = el('span', statuses[share.status], 'bill-status');
+    status.dataset.status = share.status;
+    shareRow.append(status);
     const shown = session.preview ? {
       ...share, role: share.debtorId === bill.receiverId || share.amount === '0' ? null
         : role === 'receiver' ? 'receiver' : role === 'debtor' && share.id === sampleDebtor?.id ? 'debtor' : null,
@@ -485,9 +491,6 @@ async function render(view) {
   return list(view);
 }
 
-function theme() { document.documentElement.dataset.theme = telegram?.colorScheme ?? 'light'; }
-theme();
-telegram?.onEvent('themeChanged', theme);
 telegram?.BackButton?.onClick(back);
 telegram?.BackButton?.show();
 telegram?.ready();

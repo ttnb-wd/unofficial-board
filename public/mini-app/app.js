@@ -3,6 +3,7 @@ const apiOrigin = window.BOARD_API_ORIGIN ?? '';
 const wakeTimeoutMs = 75_000;
 const saveTimeoutMs = 50_000;
 const feature = new URLSearchParams(window.location.search).get('feature');
+if (feature === 'poll' || feature === 'budget') document.documentElement.dataset.feature = feature;
 const isBudget = feature === 'budget';
 const labels = isBudget
   ? { title: 'Create Budget Vote', question: 'Title', choices: 'Amounts (MMK)', add: 'Add amount', remove: 'Remove amount', choice: 'Amount' }
@@ -45,7 +46,10 @@ function addChoice(value = '') {
   input.required = true;
   input.autocomplete = 'off';
   input.maxLength = isBudget ? 19 : 100;
-  if (isBudget) input.inputMode = 'numeric';
+  if (isBudget) {
+    input.inputMode = 'numeric';
+    input.className = 'amount-input';
+  }
   input.value = value;
 
   const remove = document.createElement('button');
@@ -69,16 +73,10 @@ function showError(message, input) {
   error.hidden = false;
   if (input) {
     input.setAttribute('aria-invalid', 'true');
+    input.setAttribute('aria-describedby', error.id);
     input.focus();
   }
 }
-
-function applyTheme() {
-  document.documentElement.dataset.theme = webApp?.colorScheme ?? 'light';
-}
-
-applyTheme();
-webApp?.onEvent('themeChanged', applyTheme);
 
 if ((feature !== 'poll' && feature !== 'budget') || !webApp?.initData) {
   const launchError = document.querySelector('#launch-error');
@@ -105,14 +103,18 @@ if ((feature !== 'poll' && feature !== 'budget') || !webApp?.initData) {
 
 webApp?.ready();
 add.addEventListener('click', () => addChoice()?.focus());
-form.addEventListener('input', (event) => {
-  event.target.removeAttribute('aria-invalid');
+form.addEventListener('input', () => {
+  const invalid = form.querySelector('[aria-invalid]');
+  invalid?.removeAttribute('aria-invalid');
+  invalid?.removeAttribute('aria-describedby');
   error.hidden = true;
 });
 
 function buildSubmission() {
   error.hidden = true;
-  form.querySelector('[aria-invalid]')?.removeAttribute('aria-invalid');
+  const invalid = form.querySelector('[aria-invalid]');
+  invalid?.removeAttribute('aria-invalid');
+  invalid?.removeAttribute('aria-describedby');
 
   const title = question.value.trim();
   if (!title) {

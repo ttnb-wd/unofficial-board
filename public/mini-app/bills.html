@@ -1,8 +1,8 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-feature="bill-splitter">
   <head>
     <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
     <title>Bill Splitter · The Unofficial Board</title>
     <link rel="stylesheet" href="/mini-app/app.css">
     <script defer src="https://telegram.org/js/telegram-web-app.js"></script>
@@ -11,12 +11,12 @@
   </head>
   <body>
     <main class="shell bill-shell">
-      <header class="bill-header">
+      <header class="feature-hero">
         <p id="simulation" class="bill-badge" hidden>PRELAUNCH · Simulation</p>
-        <h1 id="bill-title">Bill Splitter</h1>
-        <p id="bill-notice" role="status" hidden></p>
-        <p id="bill-error" role="alert" class="error" hidden></p>
+        <h1 id="bill-title" tabindex="-1">Bill Splitter</h1>
       </header>
+      <p id="bill-notice" class="success" role="status" hidden></p>
+      <p id="bill-error" role="alert" class="error" hidden></p>
       <div id="bill-content" aria-busy="true"><p>Connecting…</p></div>
       <nav id="bill-navigation" class="bill-actions" aria-label="Navigation" hidden></nav>
     </main>
