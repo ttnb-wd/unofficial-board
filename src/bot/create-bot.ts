@@ -9,10 +9,11 @@ import { registerBudgetVoteHandlers } from '../features/group-budget-vote/bot.js
 import { findFeature, features } from '../features/index.js';
 import { registerSmartPollHandlers } from '../features/smart-poll/bot.js';
 import type { createLogger } from '../logger.js';
+import { registerVoting } from './voting.js';
 import {
-  cancelledKeyboard,
   dashboardKeyboard,
   featureKeyboard,
+  showScreen,
 } from './navigation.js';
 
 function errorName(error: unknown): string {
@@ -100,6 +101,8 @@ export function createBot(
     );
   });
 
+  registerVoting(bot, config, database, botUsername, authorize);
+
   bot.start(async (ctx) => {
     if (ctx.chat.type !== 'private' || !ctx.from) {
       return;
@@ -124,46 +127,14 @@ export function createBot(
   registerSmartPollHandlers(bot, config, database, logger, authorize);
   registerBudgetVoteHandlers(bot, config, database, logger, authorize);
 
-  bot.action(
-    /^draft:cancel:(poll|budget):([a-z0-9]+)$/,
-    async (ctx) => {
-      if (!(await authorize(ctx)) || ctx.chat?.type !== 'private' || !ctx.from) {
-        await ctx.answerCbQuery('Private, authorized access is required.', {
-          show_alert: true,
-        });
-        return;
-      }
-      const feature = ctx.match[1];
-      const draftId = ctx.match[2];
-      const creatorId = BigInt(ctx.from.id);
-      const draft = draftId
-        ? feature === 'poll'
-          ? await database.smartPoll.findFirst({
-              where: { id: draftId, creatorId, status: 'DRAFT' },
-              select: { id: true },
-            })
-          : await database.budgetVote.findFirst({
-              where: { id: draftId, creatorId, status: 'DRAFT' },
-              select: { id: true },
-            })
-        : null;
-      if (!draft) {
-        await ctx.answerCbQuery('This draft is no longer active.', {
-          show_alert: true,
-        });
-        await ctx.editMessageText(
-          'This switch prompt is out of date. Your drafts are unchanged.',
-          dashboardKeyboard(),
-        );
-        return;
-      }
-      await ctx.answerCbQuery();
-      await ctx.editMessageText(
-        'Switch cancelled. Your draft is unchanged.',
-        dashboardKeyboard(),
-      );
-    },
-  );
+  bot.action(/^draft:cancel:(poll|budget):[a-z0-9]+$/, async (ctx) => {
+    if (!await authorize(ctx)) {
+      await ctx.answerCbQuery('Private, authorized access is required.', { show_alert: true });
+      return;
+    }
+    await ctx.answerCbQuery();
+    await showScreen(ctx, 'Switch cancelled. Your draft is unchanged.', dashboardKeyboard());
+  });
 
   bot.command('cancel', async (ctx) => {
     if (
@@ -176,11 +147,11 @@ export function createBot(
     const creatorId = BigInt(ctx.from.id);
     const [polls, votes] = await database.$transaction([
       database.smartPoll.updateMany({
-        where: { creatorId, status: 'DRAFT' },
+        where: { creatorId, status: 'DRAFT', draftStep: { not: 'SAVED' } },
         data: { status: 'CANCELLED' },
       }),
       database.budgetVote.updateMany({
-        where: { creatorId, status: 'DRAFT' },
+        where: { creatorId, status: 'DRAFT', draftStep: { not: 'SAVED' } },
         data: { status: 'CANCELLED' },
       }),
     ]);
@@ -188,6 +159,7 @@ export function createBot(
       polls.count + votes.count > 0
         ? 'Draft cancelled. It was not published to the group.'
         : 'There is no active draft to cancel.',
+      featureKeyboard(),
     );
   });
 
@@ -210,7 +182,7 @@ export function createBot(
     }
 
     await ctx.answerCbQuery();
-    await ctx.editMessageText(
+    await showScreen(ctx,
       `${feature.title}\n\n${feature.description}\n\nThis feature is a Step 01 scaffold.`,
       featureKeyboard(),
     );
@@ -228,20 +200,14 @@ export function createBot(
       return;
     }
 
-    const action = ctx.match[1];
     await ctx.answerCbQuery();
-    if (action === 'cancel') {
-      await ctx.editMessageText(
-        'Cancelled. Your data has not been changed.',
-        cancelledKeyboard(),
-      );
-      return;
-    }
+    await showScreen(ctx, dashboardText(), dashboardKeyboard());
+  });
 
-    await ctx.editMessageText(
-      dashboardText(),
-      dashboardKeyboard(),
-    );
+  bot.on('callback_query', async (ctx) => {
+    if (ctx.chat?.type === 'private') {
+      await ctx.answerCbQuery('This button has expired. Use /menu to reopen the dashboard.');
+    }
   });
 
   bot.catch((error, ctx) => {

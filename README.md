@@ -100,26 +100,18 @@ API continues to use the existing Neon database. Migrations run separately.
 
 **Approved rollout**
 
-1. Publish the approved commit to the GitHub branch selected for deployment.
-   Confirm the existing Neon migration status from a trusted shell with
-   `npm run db:migrate:status`. Handle any pending existing migrations as
-   a separate approved database step before using the forms.
-2. Create a Render Blueprint from `render.yaml`, or configure the existing
-   Free Web Service with the settings above. Set `MINI_APP_URL` to the planned
-   Vercel production origin. Stop any other poller using this bot token
-   before starting Render. Confirm that the token is ready for polling,
-   since Telegraf clears any prior webhook when it starts polling. Check
-   that Render's HTTPS `/healthz` returns `{"status":"ok"}`.
-3. Import the same repository into Vercel Hobby. Use the repository root,
-   the **Other** preset, and Node.js 22. Set `MINI_APP_API_ORIGIN` to the
-   Render origin and deploy to Production. Copy the stable Vercel production
-   origin. If it differs from the planned value, update `MINI_APP_URL` on
-   Render and redeploy Render before opening the forms.
-4. Check that a POST preflight to either Render API endpoint from the Vercel
-   origin returns 204 with a matching `Access-Control-Allow-Origin`.
-   Confirm a preview origin is rejected. In the owner's private Telegram
-   chat, open a fresh `/start` dashboard, submit both forms, and verify the
-   records under **My polls** and **My budget votes**.
+1. After approval, push the reviewed commit to the branch used by the
+   existing Render and Vercel projects. Check the existing Neon migration
+   history with `npm run db:migrate:status`. This release adds no migration.
+2. Deploy the commit to the existing Render service. Keep
+   `ACCESS_MODE=PRELAUNCH`, the existing database, and the existing Telegram
+   settings. Verify `/healthz` and the Vercel origin allowed by API CORS.
+3. Deploy the same commit to the existing Vercel project with its Render
+   `MINI_APP_API_ORIGIN`. Verify both form routes on the stable HTTPS origin.
+4. In the owner's private Telegram chat, open a fresh `/menu`. Tap each
+   Create button once, save both forms, open their details and results,
+   and submit both member simulations. Check **Back** and **Main Menu**
+   along the way.
 
 **Render Free behavior**
 
@@ -142,7 +134,8 @@ Telegram launch data expires after five minutes.
   allowed. Group updates are ignored and no group membership lookup is made.
 - **LIVE (explicit only):** set `ACCESS_MODE=LIVE` deliberately after approval.
   Private feature access then requires a fresh check of the configured group's
-  current membership. No administrator approval is part of feature access.
+  current membership. Telegram guarantees that lookup for other users when
+  the bot is a group administrator. Members need no individual approval.
 - Both modes preserve resource ownership checks for future personal-data
   changes and deletion operations.
 
@@ -155,8 +148,7 @@ Telegram. Smart Poll starts with a question and three answer inputs. Budget
 Vote starts with a title and three exact MMK amount inputs. Both forms support
 adding/removing choices and save only when **Done** is tapped. After the
 server confirms the save, the form shows success and closes back to Telegram. The forms need
-`MINI_APP_URL` to be a public HTTPS origin; without it, the Create button
-explains that setup is required rather than opening a native-message workflow.
+`MINI_APP_URL` to be a public HTTPS origin; the feature menu displays setup guidance until that origin is configured.
 
 `/poll` and `/budget` also provide an embedded-form launch button.
 `/polls` and `/budgets` list saved items. Existing draft records are preserved;
@@ -167,6 +159,33 @@ opening either embedded form does not cancel or alter drafts.
 
 No PRELAUNCH operation sends a message to the configured group or creates a
 group-membership record.
+
+## Poll and budget voting
+
+- **Creator** — Open the feature in the private chat, tap **Create**, and
+  submit with **Done**. Open **My polls** or **My budget votes** and select
+  the item to see its status, choices, and **Results**. In LIVE, a saved
+  LIVE draft can be published explicitly and its creator can close voting.
+- **Member View Preview** — In PRELAUNCH, the owner can choose a saved item
+  from **Member View Preview** or open the preview from its detail. Select
+  an option and tap **Submit vote** to see simulated results. The preview
+  starts from zero and uses no saved ballots, group messages, or extra records.
+- **LIVE member** — Open the announcement's **Vote or view results** link in
+  Telegram, or open **Published votes** in the feature menu. Current group
+  members can select and submit an answer or exact MMK amount. A new submission
+  replaces the member's previous selection. Closed votes remain available for
+  results. Multi-answer polls calculate each option's percentage against the
+  number of unique voters, so percentages can exceed 100% when added together.
+
+New publications use the bot's private ballot screens and aggregate results.
+Older Telegram-native polls still use the original group message for voting.
+Historical anonymous native option counts are available on the original poll.
+Legacy budget ranges are preserved for historical records. PRELAUNCH data
+cannot be published after switching to LIVE.
+
+If an announcement's delivery is uncertain, the record stays in **Publication
+pending** to avoid retrying a send that Telegram may already have accepted.
+An operator must reconcile the group message and database status before retry.
 
 ## Other confirmed features
 

@@ -216,7 +216,9 @@ describe('embedded Telegram form entry points', () => {
     await bot.handleUpdate(callbackUpdate(42, 'draft:continue:poll:olddraft'));
     await bot.handleUpdate(callbackUpdate(42, 'draft:switch:budget:poll:olddraft'));
     expect(lookup).not.toHaveBeenCalled();
-    expect(apiCall).not.toHaveBeenCalled();
+    expect(apiCall.mock.calls.map(([method]) => method)).toEqual([
+      'answerCallbackQuery', 'answerCallbackQuery',
+    ]);
   });
 
   it('keeps previously published group records read-only in PRELAUNCH', async () => {
@@ -250,5 +252,202 @@ describe('embedded Telegram form entry points', () => {
     expect(
       apiCall.mock.calls.flatMap(([, payload]) => JSON.stringify(payload)).join(' '),
     ).toContain('public HTTPS MINI_APP_URL is required');
+  });
+});
+
+describe('creator and member voting', () => {
+  afterEach(() => { vi.restoreAllMocks(); });
+
+  function record(kind: 'poll' | 'bv', isPrelaunchTest: boolean) {
+    return {
+      id: 'savedrecord', creatorId: 42n, groupId: config.groupId, isPrelaunchTest,
+      telegramPollId: null, telegramMessageId: isPrelaunchTest ? null : 333,
+      status: isPrelaunchTest ? (kind === 'poll' ? 'PRELAUNCH_PREVIEW' : 'PRELAUNCH_OPEN') : 'OPEN',
+      draftStep: 'SAVED',
+      question: 'Where should we go?', title: 'How much should we budget?',
+      isAnonymous: true, allowsMultipleAnswers: kind === 'poll', totalVoterCount: 0,
+      ranges: [],
+      options: [10_000n, 20_000n, 30_000n].map((amountMmk, index) => ({
+        id: `option${index}`, amountMmk, text: ['Cafe', 'Park', 'Museum'][index],
+        _count: { votes: 0, ballots: 0 },
+      })),
+    };
+  }
+
+  function screens(apiCall: ReturnType<typeof setupBot>['apiCall']) {
+    return apiCall.mock.calls.filter(([method]) => method === 'editMessageText')
+      .map(([, payload]) => JSON.stringify(payload));
+  }
+
+  it.each(['poll', 'bv'] as const)('edits the %s list, detail, results and simulation without writes', async (kind) => {
+    const saved = record(kind, true);
+    const store = {
+      findMany: vi.fn().mockResolvedValue([saved]),
+      findUnique: vi.fn().mockResolvedValue(saved),
+      updateMany: vi.fn(),
+    };
+    const tx = { smartPoll: store, budgetVote: store, $executeRaw: vi.fn(), $queryRaw: vi.fn() };
+    const database = {
+      ...tx,
+      $transaction: vi.fn(async (run: (client: typeof tx) => unknown) => run(tx)),
+    } as unknown as PrismaClient;
+    const { bot, apiCall, membershipCheck } = setupBot(database);
+    const owner = `vote:${kind}:owner:${saved.id}:0`;
+    const preview = `vote:${kind}:preview:${saved.id}:0`;
+    const tap = (route: string, user = 42) => bot.handleUpdate(callbackUpdate(user, route));
+
+    await tap(`${kind}:list`);
+    await tap(owner);
+    await tap(`${owner}:r`);
+    await tap(preview);
+    await tap(`${preview}:o1`);
+    await tap(`${preview}:s1`);
+    await tap(preview, 84);
+    await tap(`${owner}:p`);
+    await tap(`vote:${kind}:live:${saved.id}:0:s1`);
+    await tap('nav:home');
+
+    const [list, detail, results, voting, selected, simulated, home] = screens(apiCall);
+    expect(list).toContain(owner);
+    expect(detail).toContain('Private draft');
+    expect(detail).toContain(`vote:${kind}:mine:0`);
+    expect(results).toContain('Total voters: 0');
+    expect(voting).toContain('Member View Preview · Simulation');
+    expect(voting).toContain(owner);
+    expect(voting).toContain(kind === 'poll' ? 'Cafe' : '10,000 MMK');
+    expect(selected).toContain('Submit vote');
+    expect(simulated).toContain('Simulated vote submitted.');
+    expect(simulated).toContain('1 · 100%');
+    expect(home).toContain('Choose a feature to get started.');
+    expect(store.updateMany).not.toHaveBeenCalled();
+    expect(tx.$executeRaw).not.toHaveBeenCalled();
+    expect(tx.$queryRaw).not.toHaveBeenCalled();
+    expect(membershipCheck).not.toHaveBeenCalled();
+    expect(apiCall.mock.calls.some(([method]) => method === 'sendMessage')).toBe(false);
+  });
+
+  it('gives all seven menus dashboard navigation', async () => {
+    const { bot, apiCall } = setupBot();
+    for (const id of ['smart-poll', 'group-budget-vote', 'bill-splitter', 'one-tap-hangout',
+      'shared-memory-vault', 'plan-countdown', 'birthday-reminder']) {
+      await bot.handleUpdate(callbackUpdate(42, `feature:${id}`));
+    }
+    expect(screens(apiCall)).toHaveLength(7);
+    for (const screen of screens(apiCall)) {
+      expect(screen).toContain('"text":"Back","callback_data":"nav:home"');
+      expect(screen).toContain('"text":"Main Menu","callback_data":"nav:home"');
+    }
+  });
+
+  it.each(['poll', 'bv'] as const)('requires membership and replaces a repeat %s ballot using its transaction', async (kind) => {
+    const saved = record(kind, false);
+    const ballots = new Map<bigint, string[]>();
+    const updateCounts = () => {
+      const votes = [...ballots.values()];
+      saved.totalVoterCount = votes.length;
+      for (const option of saved.options) {
+        option._count.votes = votes.filter((choices) => choices.includes(option.id)).length;
+        option._count.ballots = option._count.votes;
+      }
+    };
+    const store = { findUnique: vi.fn(async () => { updateCounts(); return saved; }), update: vi.fn(), updateMany: vi.fn() };
+    const tx = {
+      smartPoll: store, budgetVote: store,
+      telegramGroup: { upsert: vi.fn() }, member: { upsert: vi.fn() }, groupMembership: { upsert: vi.fn() },
+      $queryRaw: vi.fn(async (sql: TemplateStringsArray) => sql.join('').includes('FOR UPDATE')
+        ? [{ id: saved.id }] : [{ total: ballots.size }]),
+      smartPollVote: {
+        deleteMany: vi.fn(async ({ where }: { where: { memberId: bigint } }) => { ballots.delete(where.memberId); }),
+        createMany: vi.fn(async ({ data }: { data: { memberId: bigint; optionId: string }[] }) => {
+          ballots.set(data[0]!.memberId, data.map(({ optionId }) => optionId));
+        }),
+      },
+      budgetVoteOptionBallot: {
+        upsert: vi.fn(async ({ create }: { create: { memberId: bigint; optionId: string } }) => {
+          ballots.set(create.memberId, [create.optionId]);
+        }),
+      },
+    };
+    const database = {
+      ...tx,
+      $transaction: vi.fn(async (run: (client: typeof tx) => unknown) => run(tx)),
+    } as unknown as PrismaClient;
+    const { bot, apiCall, membershipCheck } = setupBot(database, { ...config, accessMode: 'LIVE' });
+    membershipCheck.mockImplementation(async (_group, user) => ({ status: user === 99 ? 'left' : 'member' }) as never);
+    const member = `vote:${kind}:live:${saved.id}:0`;
+
+    await bot.handleUpdate(callbackUpdate(84, `${member}:s1`));
+    await bot.handleUpdate(callbackUpdate(84, `${member}:s${kind === 'poll' ? 3 : 2}`));
+    await bot.handleUpdate(callbackUpdate(99, `${member}:s4`));
+    expect(ballots.size).toBe(1);
+    expect(ballots.get(84n)).toEqual(kind === 'poll' ? ['option0', 'option1'] : ['option1']);
+    expect(tx.$queryRaw.mock.calls.filter(([sql]) => sql.join('').includes('FOR UPDATE'))).toHaveLength(2);
+    expect(screens(apiCall).at(-1)).toContain('Vote saved.');
+    expect(screens(apiCall).at(-1)).toContain('Total voters: 1');
+    expect(screens(apiCall).at(-1)).toContain(kind === 'poll' ? 'Park — 1 · 100%' : '20,000 MMK — 1 · 100%');
+
+    saved.status = 'CLOSED';
+    await bot.handleUpdate(callbackUpdate(84, `${member}:s4`));
+    await bot.handleUpdate(callbackUpdate(84, `${member}:r`));
+    expect(ballots.size).toBe(1);
+    expect(screens(apiCall).at(-1)).toContain('Total voters: 1');
+  });
+
+  it.each(['poll', 'bv'] as const)('claims a LIVE %s draft once and opens it from the group deep link', async (kind) => {
+    const saved = { ...record(kind, false), status: 'DRAFT', telegramMessageId: null as number | null };
+    const store = {
+      findUnique: vi.fn().mockResolvedValue(saved),
+      updateMany: vi.fn(async ({ where, data }: {
+        where: { status: string }; data: { status: string; telegramMessageId?: number };
+      }) => {
+        if (where.status !== saved.status) return { count: 0 };
+        saved.status = data.status;
+        if (data.telegramMessageId !== undefined) saved.telegramMessageId = data.telegramMessageId;
+        return { count: 1 };
+      }),
+    };
+    const tx = {
+      smartPoll: store, budgetVote: store,
+      telegramGroup: { upsert: vi.fn() }, member: { upsert: vi.fn() }, groupMembership: { upsert: vi.fn() },
+    };
+    const database = {
+      ...tx,
+      $transaction: vi.fn(async (run: (client: typeof tx) => unknown) => run(tx)),
+    } as unknown as PrismaClient;
+    const { bot, apiCall, membershipCheck } = setupBot(database, { ...config, accessMode: 'LIVE' });
+    membershipCheck.mockResolvedValue({ status: 'member' } as never);
+    const route = `vote:${kind}:owner:${saved.id}:0:p`;
+    await Promise.all([bot.handleUpdate(callbackUpdate(42, route)), bot.handleUpdate(callbackUpdate(42, route))]);
+    expect(saved.status).toBe('OPEN');
+    const sends = apiCall.mock.calls.filter(([method]) => method === 'sendMessage');
+    expect(sends).toHaveLength(1);
+    expect(sends[0]?.[1]).toEqual(expect.objectContaining({
+      chat_id: config.groupId.toString(),
+      reply_markup: expect.objectContaining({
+        inline_keyboard: [[expect.objectContaining({ url: `https://t.me/test_bot?start=vote_${kind}_${saved.id}` })]],
+      }),
+    }));
+    await bot.handleUpdate(messageUpdate(84, { id: 84, type: 'private', first_name: 'Member' }, `/start vote_${kind}_${saved.id}`));
+    expect(apiCall).toHaveBeenCalledWith('sendMessage', expect.objectContaining({
+      chat_id: 84, text: expect.stringContaining('then submit.'),
+    }));
+  });
+
+  it('never promotes a PRELAUNCH record in LIVE, even through an old publish button', async () => {
+    const saved = record('poll', true);
+    saved.status = 'DRAFT';
+    const store = { findUnique: vi.fn().mockResolvedValue(saved), updateMany: vi.fn() };
+    const tx = {
+      smartPoll: store,
+      telegramGroup: { upsert: vi.fn() }, member: { upsert: vi.fn() }, groupMembership: { upsert: vi.fn() },
+    };
+    const database = {
+      $transaction: vi.fn(async (run: (client: typeof tx) => unknown) => run(tx)),
+    } as unknown as PrismaClient;
+    const { bot, apiCall, membershipCheck } = setupBot(database, { ...config, accessMode: 'LIVE' });
+    membershipCheck.mockResolvedValue({ status: 'member' } as never);
+    await bot.handleUpdate(callbackUpdate(42, `poll:publish:${saved.id}`));
+    expect(store.updateMany).not.toHaveBeenCalled();
+    expect(apiCall.mock.calls.some(([method]) => method === 'sendMessage')).toBe(false);
   });
 });

@@ -5,7 +5,7 @@ import { readFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { Prisma, PrismaClient } from '@prisma/client';
-import { Markup, Telegram } from 'telegraf';
+import { Telegram } from 'telegraf';
 import type { AppConfig } from '../config.js';
 import { verifyAndRecordMembership } from '../access/membership.js';
 import { hasPrelaunchAccess } from '../access/policy.js';
@@ -196,10 +196,7 @@ async function createSubmission(
           config.accessMode === 'PRELAUNCH'
             ? 'PRELAUNCH_PREVIEW'
             : 'DRAFT',
-        message:
-          config.accessMode === 'PRELAUNCH'
-            ? 'Poll saved privately. Group delivery requires LIVE mode.'
-            : 'Poll saved.',
+        message: 'Poll saved privately. Open My polls in the bot.',
       });
     } catch (error) {
       if (error instanceof SubmissionConflictError) {
@@ -238,38 +235,6 @@ async function createSubmission(
       identity.userId,
       parsed.data,
     );
-    let privateNoticeSent = false;
-    if (saved.created && config.accessMode === 'PRELAUNCH') {
-      try {
-        await telegram.sendMessage(
-          identity.userId.toString(),
-          [
-            'Private budget vote',
-            '',
-            parsed.data.question,
-            ...parsed.data.amounts.map(
-              (amount) => `${formatMmk(amount)} MMK`,
-            ),
-          ].join('\n'),
-          Markup.inlineKeyboard([
-            ...saved.options.map((option) => [
-              Markup.button.callback(
-                `${formatMmk(option.amountMmk)} MMK`,
-                `bv:amount:${saved.id}:${option.id}`,
-              ),
-            ]),
-            [Markup.button.callback('Results', `bv:amount-results:${saved.id}`)],
-            [Markup.button.callback('Close vote', `bv:close:${saved.id}`)],
-          ]),
-        );
-        privateNoticeSent = true;
-      } catch (error) {
-        logger.warn(
-          { errorName: errorName(error), operation: 'mini-app-budget-notice' },
-          'Budget vote saved but the private Telegram notice could not be sent',
-        );
-      }
-    }
     sendJson(response, saved.created ? 201 : 200, {
       id: saved.id,
       created: saved.created,
@@ -277,12 +242,7 @@ async function createSubmission(
         config.accessMode === 'PRELAUNCH'
           ? 'PRELAUNCH_OPEN'
           : 'DRAFT',
-      message:
-        config.accessMode === 'PRELAUNCH'
-          ? privateNoticeSent
-            ? 'Budget vote saved privately. Vote in the bot chat.'
-            : 'Budget vote saved privately. Find it with /budgets in the bot chat.'
-          : 'Budget vote saved.',
+      message: 'Budget vote saved privately. Open My budget votes in the bot.',
     });
   } catch (error) {
     if (error instanceof SubmissionConflictError) {
@@ -517,10 +477,6 @@ async function saveBudgetVote(
     }
     throw new MiniAppPersistenceError(operation, error);
   }
-}
-
-function formatMmk(amount: bigint): string {
-  return new Intl.NumberFormat('en-US').format(amount);
 }
 
 async function serveAsset(

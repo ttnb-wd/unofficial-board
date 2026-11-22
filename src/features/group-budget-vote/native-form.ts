@@ -5,6 +5,7 @@ import type { Context } from 'telegraf';
 import type { AppConfig } from '../../config.js';
 import type { createLogger } from '../../logger.js';
 import { buildMiniAppUrl } from '../../mini-app/urls.js';
+import { navigationRow, showScreen } from '../../bot/navigation.js';
 import {
   isDraftMoreRecent,
 } from '../../bot/draft-switch.js';
@@ -25,45 +26,19 @@ function formatMmk(amount: bigint): string {
 function createKeyboard(config: AppConfig) {
   const miniAppUrl = buildMiniAppUrl(config, 'budget');
   return Markup.inlineKeyboard([
-    [
-      miniAppUrl
-        ? Markup.button.webApp('Create Budget Vote', miniAppUrl)
-        : Markup.button.callback('Create Budget Vote', 'bv:create'),
-    ],
+    ...(miniAppUrl ? [[Markup.button.webApp('Create Budget Vote', miniAppUrl)]] : []),
     [Markup.button.callback('My budget votes', 'bv:list')],
+    ...(config.accessMode === 'LIVE'
+      ? [[Markup.button.callback('Published votes', 'vote:bv:group')]]
+      : [[Markup.button.callback('Member View Preview', 'vote:bv:samples')]]),
+    navigationRow('nav:home'),
   ]);
 }
 
-function miniAppKeyboard(url: string) {
-  return Markup.inlineKeyboard([
-    [Markup.button.webApp('Open Budget Vote form', url)],
-  ]);
-}
-
-async function openBudgetMiniApp(
-  ctx: Context,
-  config: AppConfig,
-  fromCallback = false,
-): Promise<void> {
-  const miniAppUrl = buildMiniAppUrl(config, 'budget');
-  if (!miniAppUrl) {
-    const message = 'A public HTTPS MINI_APP_URL is required to open this form.';
-    if (fromCallback) {
-      await ctx.answerCbQuery(message, { show_alert: true });
-    } else {
-      await ctx.reply(message);
-    }
-    return;
-  }
-  if (fromCallback) {
-    await ctx.answerCbQuery();
-    await ctx.editMessageText(
-      'Open the Budget Vote form.',
-      miniAppKeyboard(miniAppUrl),
-    );
-    return;
-  }
-  await ctx.reply('Open the Budget Vote form.', miniAppKeyboard(miniAppUrl));
+function menuText(config: AppConfig): string {
+  return buildMiniAppUrl(config, 'budget')
+    ? 'Group Budget Vote'
+    : 'Group Budget Vote\n\nA public HTTPS MINI_APP_URL is required to open the form.';
 }
 
 function promptKeyboard(voteId: string) {
@@ -349,7 +324,7 @@ async function showStaleDraftNotice(ctx: Context): Promise<void> {
   await ctx.editMessageText(
     'This draft is no longer active. Your other drafts are unchanged.',
     Markup.inlineKeyboard([
-      [Markup.button.callback('Home', 'nav:home')],
+      [Markup.button.callback('Main Menu', 'nav:home')],
     ]),
   );
 }
@@ -367,14 +342,14 @@ export function registerBudgetMiniAppLaunch(
       return;
     }
     await ctx.answerCbQuery();
-    await ctx.editMessageText('Group Budget Vote', createKeyboard(config));
+    await showScreen(ctx, menuText(config), createKeyboard(config));
   });
 
   bot.command('budget', async (ctx) => {
     if (!(await authorize(ctx)) || !isPrivate(ctx)) {
       return;
     }
-    await openBudgetMiniApp(ctx, config);
+    await ctx.reply(menuText(config), createKeyboard(config));
   });
 
   bot.action('bv:create', async (ctx) => {
@@ -384,7 +359,8 @@ export function registerBudgetMiniAppLaunch(
       });
       return;
     }
-    await openBudgetMiniApp(ctx, config, true);
+    await ctx.answerCbQuery('Menu refreshed.');
+    await showScreen(ctx, menuText(config), createKeyboard(config));
   });
 }
 
@@ -507,7 +483,7 @@ export function registerNativeBudgetFormHandlers(
     }
     if (vote.draftStep === 'TITLE' && !vote.title) {
       await ctx.answerCbQuery();
-      await ctx.editMessageText('Group Budget Vote', createKeyboard(config));
+      await showScreen(ctx, menuText(config), createKeyboard(config));
       return;
     }
     await database.budgetVote.updateMany({

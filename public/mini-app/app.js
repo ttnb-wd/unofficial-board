@@ -20,6 +20,8 @@ const maxMmk = 9_223_372_036_854_775_807n;
 let pendingBody;
 let saveAttempted = false;
 let saved = false;
+webApp?.BackButton?.onClick(() => webApp.close());
+webApp?.BackButton?.show();
 
 function refreshChoiceControls() {
   const count = choices.children.length;
@@ -213,7 +215,7 @@ form.addEventListener('submit', async (event) => {
     }
     saved = true;
     form.hidden = true;
-    success.textContent = isBudget ? 'Budget vote saved' : 'Poll saved';
+    success.textContent = result.message ?? (isBudget ? 'Budget vote saved' : 'Poll saved');
     success.hidden = false;
     success.focus();
     window.setTimeout(() => webApp.close(), 1100);

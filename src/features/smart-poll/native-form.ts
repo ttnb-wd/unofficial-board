@@ -4,6 +4,7 @@ import type { Context } from 'telegraf';
 import type { AppConfig } from '../../config.js';
 import type { createLogger } from '../../logger.js';
 import { buildMiniAppUrl } from '../../mini-app/urls.js';
+import { navigationRow, showScreen } from '../../bot/navigation.js';
 import {
   isDraftMoreRecent,
 } from '../../bot/draft-switch.js';
@@ -21,45 +22,19 @@ function isPrivate(ctx: Context): boolean {
 function createKeyboard(config: AppConfig) {
   const miniAppUrl = buildMiniAppUrl(config, 'poll');
   return Markup.inlineKeyboard([
-    [
-      miniAppUrl
-        ? Markup.button.webApp('Create Poll', miniAppUrl)
-        : Markup.button.callback('Create Poll', 'poll:create'),
-    ],
+    ...(miniAppUrl ? [[Markup.button.webApp('Create Poll', miniAppUrl)]] : []),
     [Markup.button.callback('My polls', 'poll:list')],
+    ...(config.accessMode === 'LIVE'
+      ? [[Markup.button.callback('Published votes', 'vote:poll:group')]]
+      : [[Markup.button.callback('Member View Preview', 'vote:poll:samples')]]),
+    navigationRow('nav:home'),
   ]);
 }
 
-function miniAppKeyboard(url: string) {
-  return Markup.inlineKeyboard([
-    [Markup.button.webApp('Open Smart Poll form', url)],
-  ]);
-}
-
-async function openPollMiniApp(
-  ctx: Context,
-  config: AppConfig,
-  fromCallback = false,
-): Promise<void> {
-  const miniAppUrl = buildMiniAppUrl(config, 'poll');
-  if (!miniAppUrl) {
-    const message = 'A public HTTPS MINI_APP_URL is required to open this form.';
-    if (fromCallback) {
-      await ctx.answerCbQuery(message, { show_alert: true });
-    } else {
-      await ctx.reply(message);
-    }
-    return;
-  }
-  if (fromCallback) {
-    await ctx.answerCbQuery();
-    await ctx.editMessageText(
-      'Open the Smart Poll form.',
-      miniAppKeyboard(miniAppUrl),
-    );
-    return;
-  }
-  await ctx.reply('Open the Smart Poll form.', miniAppKeyboard(miniAppUrl));
+function menuText(config: AppConfig): string {
+  return buildMiniAppUrl(config, 'poll')
+    ? 'Smart Poll'
+    : 'Smart Poll\n\nA public HTTPS MINI_APP_URL is required to open the form.';
 }
 
 function promptKeyboard(pollId: string) {
@@ -316,7 +291,7 @@ async function showStaleDraftNotice(ctx: Context): Promise<void> {
   await ctx.editMessageText(
     'This draft is no longer active. Your other drafts are unchanged.',
     Markup.inlineKeyboard([
-      [Markup.button.callback('Home', 'nav:home')],
+      [Markup.button.callback('Main Menu', 'nav:home')],
     ]),
   );
 }
@@ -334,14 +309,14 @@ export function registerSmartPollMiniAppLaunch(
       return;
     }
     await ctx.answerCbQuery();
-    await ctx.editMessageText('Smart Poll', createKeyboard(config));
+    await showScreen(ctx, menuText(config), createKeyboard(config));
   });
 
   bot.command('poll', async (ctx) => {
     if (!(await authorize(ctx)) || !isPrivate(ctx)) {
       return;
     }
-    await openPollMiniApp(ctx, config);
+    await ctx.reply(menuText(config), createKeyboard(config));
   });
 
   bot.action('poll:create', async (ctx) => {
@@ -351,7 +326,8 @@ export function registerSmartPollMiniAppLaunch(
       });
       return;
     }
-    await openPollMiniApp(ctx, config, true);
+    await ctx.answerCbQuery('Menu refreshed.');
+    await showScreen(ctx, menuText(config), createKeyboard(config));
   });
 }
 
@@ -636,7 +612,7 @@ export function registerNativeSmartPollFormHandlers(
       return;
     }
     await ctx.answerCbQuery();
-    await ctx.editMessageText('Smart Poll', createKeyboard(config));
+    await showScreen(ctx, menuText(config), createKeyboard(config));
   });
 
   bot.action(/^poll:done:([a-z0-9]+)$/, async (ctx) => {

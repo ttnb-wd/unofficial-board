@@ -3,6 +3,7 @@ import { Markup, Telegraf } from 'telegraf';
 import type { Context } from 'telegraf';
 import type { AppConfig } from '../../config.js';
 import type { createLogger } from '../../logger.js';
+import { navigationRow, showScreen } from '../../bot/navigation.js';
 import { registerBudgetMiniAppLaunch } from './native-form.js';
 
 type Authorize = (ctx: Context, allowGroupChat?: boolean) => Promise<boolean>;
@@ -132,183 +133,13 @@ export function registerBudgetVoteHandlers(
   authorize: Authorize,
 ): void {
   registerBudgetMiniAppLaunch(bot, config, authorize);
-
-  async function listBudgetVotes(ctx: Context): Promise<void> {
-    if (!ctx.from) return;
-    const votes = await database.budgetVote.findMany({
-      where: { creatorId: BigInt(ctx.from.id) },
-      include: { ranges: { orderBy: { position: 'asc' } } },
-      orderBy: { createdAt: 'desc' },
-      take: 10,
-    });
-    if (votes.length === 0) {
-      await ctx.reply('You have no budget votes. Send /budget to create one.');
-      return;
-    }
-    for (const vote of votes) {
-      const options = await database.$queryRaw<
-        { id: string; amountMmk: bigint }[]
-      >`
-        SELECT "id", "amountMmk"
-        FROM "BudgetVoteOption"
-        WHERE "budgetVoteId" = ${vote.id}
-        ORDER BY "position" ASC
-      `;
-      const isOpen = vote.status === 'PRELAUNCH_OPEN' ||
-        (config.accessMode === 'LIVE' && vote.status === 'OPEN');
-      const actions =
-        options.length > 0 && isOpen
-          ? exactBudgetVoteKeyboard(vote.id, options, true)
-          : isOpen
-            ? Markup.inlineKeyboard([
-                [Markup.button.callback('Close vote', `bv:close:${vote.id}`)],
-              ])
-            : undefined;
-      const counts =
-        options.length > 0
-          ? await getExactVoteCounts(database, vote.id)
-          : await getVoteCounts(database, vote.id);
-      await ctx.reply(
-        `${options.length > 0
-          ? renderExactBudgetVote(vote.title, options, counts)
-          : renderBudgetVote(vote, counts)}\nStatus: ${vote.status}`,
-        actions,
-      );
-    }
-  }
-
-  bot.action('bv:list', async (ctx) => {
-    if (!(await authorize(ctx))) {
-      await ctx.answerCbQuery('Private, authorized access is required.', { show_alert: true });
-      return;
-    }
-    await ctx.answerCbQuery();
-    await listBudgetVotes(ctx);
-  });
-
-  bot.command('budgets', async (ctx) => {
-    if (await authorize(ctx)) await listBudgetVotes(ctx);
-  });
-
-  bot.action(/^bv:publish:([a-z0-9]+)$/, async (ctx) => {
-    if (!(await authorize(ctx)) || ctx.chat?.type !== 'private' || !ctx.from) {
-      await ctx.answerCbQuery('Private, authorized access is required.', {
-        show_alert: true,
-      });
-      return;
-    }
-    const voteId = ctx.match[1];
-    if (!voteId) {
-      await ctx.answerCbQuery('This vote reference is invalid.', { show_alert: true });
-      return;
-    }
-    const vote = await database.budgetVote.findFirst({
-      where: {
-        id: voteId,
-        creatorId: BigInt(ctx.from.id),
-        status: 'DRAFT',
-        draftStep: { in: ['READY', 'SAVED'] },
-      },
-      include: {
-        ranges: { orderBy: { position: 'asc' } },
-        options: { orderBy: { position: 'asc' } },
-      },
-    });
-    if (
-      !vote?.title ||
-      (vote.options.length < 2 && vote.ranges.length < 2)
-    ) {
-      await ctx.answerCbQuery('Add a title and at least two choices first.', {
-        show_alert: true,
-      });
-      return;
-    }
-
-    if (config.accessMode === 'PRELAUNCH') {
-      const claimed = await database.budgetVote.updateMany({
-        where: { id: vote.id, creatorId: vote.creatorId, status: 'DRAFT' },
-        data: { status: 'PRELAUNCH_OPEN' },
-      });
-      if (claimed.count !== 1) {
-        await ctx.answerCbQuery('This vote has already been processed.', {
-          show_alert: true,
-        });
-        return;
-      }
-      await ctx.answerCbQuery();
-      const exact = vote.options.length > 0;
-      const counts = exact
-        ? await getExactVoteCounts(database, vote.id)
-        : await getVoteCounts(database, vote.id);
-      await ctx.editMessageText(
-        `Private owner-only budget vote (not sent to the group)\n\n${
-          exact
-            ? renderExactBudgetVote(vote.title, vote.options, counts)
-            : renderBudgetVote(vote, counts)
-        }`,
-        exact
-          ? exactBudgetVoteKeyboard(vote.id, vote.options, true)
-          : budgetVoteKeyboard(vote.id, vote.ranges, true),
-      );
-      return;
-    }
-
-    const claimed = await database.budgetVote.updateMany({
-      where: { id: vote.id, creatorId: vote.creatorId, status: 'DRAFT' },
-      data: { status: 'PUBLISHING' },
-    });
-    if (claimed.count !== 1) {
-      await ctx.answerCbQuery('This vote has already been processed.', {
-        show_alert: true,
-      });
-      return;
-    }
-    let sentMessage: Awaited<ReturnType<typeof ctx.telegram.sendMessage>> | undefined;
-    try {
-      const exact = vote.options.length > 0;
-      sentMessage = await ctx.telegram.sendMessage(
-        config.groupId.toString(),
-        exact
-          ? renderExactBudgetVote(vote.title, vote.options, new Map())
-          : renderBudgetVote(vote, new Map()),
-        exact
-          ? exactBudgetVoteKeyboard(vote.id, vote.options, false)
-          : budgetVoteKeyboard(vote.id, vote.ranges, false),
-      );
-      await database.budgetVote.update({
-        where: { id: vote.id },
-        data: { status: 'OPEN', telegramMessageId: sentMessage.message_id },
-      });
-    } catch (error) {
-      if (sentMessage) {
-        try {
-          await ctx.telegram.deleteMessage(
-            config.groupId.toString(),
-            sentMessage.message_id,
-          );
-        } catch (deleteError) {
-          logger.error(
-            {
-              errorName: errorName(deleteError),
-              operation: 'compensate-failed-budget-publish',
-              budgetVoteId: vote.id,
-            },
-            'Could not remove a budget vote whose database update failed',
-          );
-        }
-      }
-      await database.budgetVote.updateMany({
-        where: { id: vote.id, status: 'PUBLISHING' },
-        data: { status: 'DRAFT' },
-      });
-      throw error;
-    }
-    await ctx.answerCbQuery('Budget vote published.');
-    await ctx.editMessageText('Your budget vote is live in the configured group.');
-  });
+  const legacyGroupAccess = (ctx: Context) =>
+    config.accessMode === 'LIVE' &&
+    (ctx.chat?.type === 'group' || ctx.chat?.type === 'supergroup') &&
+    authorize(ctx, true);
 
   bot.action(/^bv:vote:([a-z0-9]+):([a-z0-9]+)$/, async (ctx) => {
-    const allowed = await authorize(ctx, true);
+    const allowed = await legacyGroupAccess(ctx);
     if (!allowed || !ctx.from) {
       await ctx.answerCbQuery('Current membership in the configured group is required.', {
         show_alert: true,
@@ -321,14 +152,13 @@ export function registerBudgetVoteHandlers(
       await ctx.answerCbQuery('This vote option is invalid.', { show_alert: true });
       return;
     }
-    const expectedStatus =
-      config.accessMode === 'PRELAUNCH' ? 'PRELAUNCH_OPEN' : 'OPEN';
     const vote = await database
       .$transaction(async (transaction) => {
         const locked = await transaction.$queryRaw<{ id: string }[]>`
           SELECT "id" FROM "BudgetVote"
           WHERE "id" = ${voteId}
-            AND "status" = ${expectedStatus}::"BudgetVoteStatus"
+            AND "status" = 'OPEN'
+          AND "groupId" = ${config.groupId} AND NOT "isPrelaunchTest" AND "telegramMessageId" IS NOT NULL
           FOR UPDATE
         `;
         if (locked.length !== 1) {
@@ -355,11 +185,9 @@ export function registerBudgetVoteHandlers(
             budgetVoteId: currentVote.id,
             memberId: BigInt(ctx.from.id),
             rangeId: selectedRange.id,
-            isPrelaunchTest: config.accessMode === 'PRELAUNCH',
           },
           update: {
             rangeId: selectedRange.id,
-            isPrelaunchTest: config.accessMode === 'PRELAUNCH',
           },
         });
         return currentVote;
@@ -377,12 +205,7 @@ export function registerBudgetVoteHandlers(
 
     const counts = await getVoteCounts(database, vote.id);
     const output = renderBudgetVote(vote, counts);
-    if (ctx.chat?.type === 'private') {
-      await ctx.editMessageText(
-        `Private owner-only budget vote (not sent to the group)\n\n${output}`,
-        budgetVoteKeyboard(vote.id, vote.ranges, true),
-      );
-    } else if (vote.telegramMessageId !== null) {
+    if (vote.telegramMessageId !== null) {
       await ctx.telegram.editMessageText(
         config.groupId.toString(),
         vote.telegramMessageId,
@@ -395,7 +218,7 @@ export function registerBudgetVoteHandlers(
   });
 
   bot.action(/^bv:amount:([a-z0-9]+):([a-zA-Z0-9_-]+)$/, async (ctx) => {
-    if (!(await authorize(ctx, true)) || !ctx.from) {
+    if (!(await legacyGroupAccess(ctx)) || !ctx.from) {
       await ctx.answerCbQuery('Current membership in the configured group is required.', {
         show_alert: true,
       });
@@ -407,13 +230,12 @@ export function registerBudgetVoteHandlers(
       await ctx.answerCbQuery('This vote option is invalid.', { show_alert: true });
       return;
     }
-    const expectedStatus =
-      config.accessMode === 'PRELAUNCH' ? 'PRELAUNCH_OPEN' : 'OPEN';
     const saved = await database.$transaction(async (transaction) => {
       const locked = await transaction.$queryRaw<{ id: string }[]>`
         SELECT "id" FROM "BudgetVote"
         WHERE "id" = ${voteId}
-          AND "status" = ${expectedStatus}::"BudgetVoteStatus"
+          AND "status" = 'OPEN'
+          AND "groupId" = ${config.groupId} AND NOT "isPrelaunchTest" AND "telegramMessageId" IS NOT NULL
         FOR UPDATE
       `;
       if (locked.length !== 1) {
@@ -444,7 +266,7 @@ export function registerBudgetVoteHandlers(
           ("budgetVoteId", "memberId", "optionId", "isPrelaunchTest", "updatedAt")
         VALUES
           (${voteId}, ${BigInt(ctx.from.id)}, ${optionId},
-           ${config.accessMode === 'PRELAUNCH'}, CURRENT_TIMESTAMP)
+           false, CURRENT_TIMESTAMP)
         ON CONFLICT ("budgetVoteId", "memberId")
         DO UPDATE SET
           "optionId" = EXCLUDED."optionId",
@@ -466,12 +288,7 @@ export function registerBudgetVoteHandlers(
 
     const counts = await getExactVoteCounts(database, voteId);
     const output = renderExactBudgetVote(saved.title, saved.options, counts);
-    if (ctx.chat?.type === 'private') {
-      await ctx.editMessageText(
-        `Private budget vote\n\n${output}`,
-        exactBudgetVoteKeyboard(voteId, saved.options, true),
-      );
-    } else if (saved.telegramMessageId !== null) {
+    if (saved.telegramMessageId !== null) {
       await ctx.telegram.editMessageText(
         config.groupId.toString(),
         saved.telegramMessageId,
@@ -484,7 +301,7 @@ export function registerBudgetVoteHandlers(
   });
 
   bot.action(/^bv:amount-results:([a-z0-9]+)$/, async (ctx) => {
-    if (!(await authorize(ctx, true))) {
+    if (!(await legacyGroupAccess(ctx))) {
       await ctx.answerCbQuery('Authorized access is required.', {
         show_alert: true,
       });
@@ -495,13 +312,12 @@ export function registerBudgetVoteHandlers(
       await ctx.answerCbQuery('This vote reference is invalid.', { show_alert: true });
       return;
     }
-    const expectedStatus =
-      config.accessMode === 'PRELAUNCH' ? 'PRELAUNCH_OPEN' : 'OPEN';
     const votes = await database.$queryRaw<{ title: string | null }[]>`
       SELECT "title"
       FROM "BudgetVote"
       WHERE "id" = ${voteId}
-        AND "status" = ${expectedStatus}::"BudgetVoteStatus"
+        AND "status" = 'OPEN'
+          AND "groupId" = ${config.groupId} AND NOT "isPrelaunchTest" AND "telegramMessageId" IS NOT NULL
     `;
     if (!votes[0]) {
       await ctx.answerCbQuery('Vote not found.', { show_alert: true });
@@ -523,7 +339,7 @@ export function registerBudgetVoteHandlers(
   });
 
   bot.action(/^bv:results:([a-z0-9]+)$/, async (ctx) => {
-    if (!(await authorize(ctx, true))) {
+    if (!(await legacyGroupAccess(ctx))) {
       await ctx.answerCbQuery('Authorized access is required.', {
         show_alert: true,
       });
@@ -537,7 +353,7 @@ export function registerBudgetVoteHandlers(
     const vote = await database.budgetVote.findUnique({
       where: {
         id: voteId,
-        status: config.accessMode === 'PRELAUNCH' ? 'PRELAUNCH_OPEN' : 'OPEN',
+        status: 'OPEN', groupId: config.groupId, isPrelaunchTest: false,
       },
       include: { ranges: { orderBy: { position: 'asc' } } },
     });
@@ -557,7 +373,7 @@ export function registerBudgetVoteHandlers(
   });
 
   bot.action(/^bv:close:([a-z0-9]+)$/, async (ctx) => {
-    if (!(await authorize(ctx)) || ctx.chat?.type !== 'private' || !ctx.from) {
+    if (config.accessMode !== 'LIVE' || !(await authorize(ctx)) || ctx.chat?.type !== 'private' || !ctx.from) {
       await ctx.answerCbQuery('Only the authorized creator can close this vote.', {
         show_alert: true,
       });
@@ -569,7 +385,7 @@ export function registerBudgetVoteHandlers(
       return;
     }
     const vote = await database.budgetVote.findFirst({
-      where: { id: voteId, creatorId: BigInt(ctx.from.id) },
+      where: { id: voteId, creatorId: BigInt(ctx.from.id), groupId: config.groupId },
     });
     if (!vote) {
       await ctx.answerCbQuery('Only the vote creator can close it.', {
@@ -582,18 +398,21 @@ export function registerBudgetVoteHandlers(
       return;
     }
     if (
-      vote.status !== 'PRELAUNCH_OPEN' &&
-      (config.accessMode !== 'LIVE' || vote.status !== 'OPEN')
+      vote.isPrelaunchTest || vote.status !== 'OPEN' || vote.telegramMessageId === null
     ) {
       await ctx.answerCbQuery('This vote cannot be closed in its current state.', {
         show_alert: true,
       });
       return;
     }
-    await database.budgetVote.update({
-      where: { id: vote.id },
+    const closed = await database.budgetVote.updateMany({
+      where: { id: vote.id, status: 'OPEN', isPrelaunchTest: false },
       data: { status: 'CLOSED', closedAt: new Date() },
     });
+    if (!closed.count) {
+      await ctx.answerCbQuery('This vote is already closed.');
+      return;
+    }
     if (vote.status === 'OPEN' && vote.telegramMessageId !== null) {
       try {
         await ctx.telegram.editMessageReplyMarkup(
@@ -614,5 +433,6 @@ export function registerBudgetVoteHandlers(
       }
     }
     await ctx.answerCbQuery('Vote closed.');
+    await showScreen(ctx, 'Voting closed.', Markup.inlineKeyboard([navigationRow('bv:list')]));
   });
 }

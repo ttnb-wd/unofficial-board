@@ -517,7 +517,7 @@ describe('native Telegram form workflows', () => {
     ]);
   });
 
-  it('opens Smart Poll despite a persisted Budget Vote draft', async () => {
+  it('refreshes a stale Smart Poll button despite a persisted Budget Vote draft', async () => {
     const state = pollDatabase({ existingBudget: true });
     const { bot, apiCall } = testBot(state.database, (instance) =>
       registerNativeSmartPollFormHandlers(
@@ -533,12 +533,12 @@ describe('native Telegram form workflows', () => {
     expect(apiCall).toHaveBeenCalledWith(
       'editMessageText',
       expect.objectContaining({
-        text: 'Open the Smart Poll form.',
+        text: 'Smart Poll',
         reply_markup: expect.objectContaining({
           inline_keyboard: expect.arrayContaining([
             expect.arrayContaining([
               expect.objectContaining({
-                text: 'Open Smart Poll form',
+                text: 'Create Poll',
                 web_app: { url: 'https://mini.example/mini-app?feature=poll' },
               }),
             ]),
@@ -553,7 +553,7 @@ describe('native Telegram form workflows', () => {
     });
   });
 
-  it('opens Budget Vote despite a persisted Smart Poll draft', async () => {
+  it('refreshes a stale Budget Vote button despite a persisted Smart Poll draft', async () => {
     const state = budgetDatabase({ existingPoll: true });
     const { bot, apiCall } = testBot(state.database, (instance) =>
       registerNativeBudgetFormHandlers(
@@ -569,12 +569,12 @@ describe('native Telegram form workflows', () => {
     expect(apiCall).toHaveBeenCalledWith(
       'editMessageText',
       expect.objectContaining({
-        text: 'Open the Budget Vote form.',
+        text: 'Group Budget Vote',
         reply_markup: expect.objectContaining({
           inline_keyboard: expect.arrayContaining([
             expect.arrayContaining([
               expect.objectContaining({
-                text: 'Open Budget Vote form',
+                text: 'Create Budget Vote',
                 web_app: { url: 'https://mini.example/mini-app?feature=budget' },
               }),
             ]),

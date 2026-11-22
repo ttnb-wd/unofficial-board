@@ -258,7 +258,7 @@ describe('Mini App API', () => {
         expect.anything(),
         expect.anything(),
       );
-      expect(telegram.sendMessage).toHaveBeenCalledOnce();
+      expect(telegram.sendMessage).not.toHaveBeenCalled();
 
       const denied = await post('/api/smart-polls', 84, {
         ...pollBody,
