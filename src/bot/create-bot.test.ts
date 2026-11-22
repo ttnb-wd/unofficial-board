@@ -86,6 +86,47 @@ describe('PRELAUNCH bot access', () => {
     vi.restoreAllMocks();
   });
 
+  it('launches the countdown form directly and keeps its previews owner-only', async () => {
+    const { bot, apiCall, membershipCheck } = setupBot();
+    await bot.handleUpdate(callbackUpdate(73, 'feature:plan-countdown'));
+    expect(apiCall.mock.calls.map(([method]) => method)).toEqual(['answerCallbackQuery']);
+    await bot.handleUpdate(callbackUpdate(42, 'feature:plan-countdown'));
+    const edit = apiCall.mock.calls.find(([method]) => method === 'editMessageText');
+    expect(edit?.[1]).toMatchObject({ reply_markup: { inline_keyboard: [
+      [{ text: 'Create Countdown', web_app: { url: 'https://mini.example/mini-app/countdown?view=create' } }],
+      [{ text: 'Upcoming Countdowns' }],
+      [{ text: 'My Events' }],
+      [{ text: 'Completed Events' }],
+      [{ text: 'Preview Notifications' }],
+      [{ text: 'Preview Member View' }],
+      [{ text: 'Back' }, { text: 'Main Menu' }],
+    ] } });
+    expect(membershipCheck).not.toHaveBeenCalled();
+  });
+
+  it('routes a LIVE announcement link to authorized countdown details', async () => {
+    const upsert = vi.fn();
+    const database = {
+      $transaction: async (work: (tx: object) => Promise<unknown>) => work({
+        telegramGroup: { upsert }, member: { upsert }, groupMembership: { upsert },
+      }),
+    } as unknown as PrismaClient;
+    const { bot, apiCall, membershipCheck } = setupBot(database, { ...config, accessMode: 'LIVE' });
+    membershipCheck.mockResolvedValue({
+      status: 'member', user: { id: 73, is_bot: false, first_name: 'Fixture member' },
+    });
+    const id = 'c9633958-3bd2-4d2b-b4a6-42e0f565db81';
+    await bot.handleUpdate(messageUpdate(73, { id: 73, type: 'private', first_name: 'Fixture member' }, `/start countdown_${id}`));
+    expect(membershipCheck).toHaveBeenCalledWith(String(config.groupId), 73);
+    expect(apiCall).toHaveBeenCalledWith('sendMessage', expect.objectContaining({
+      reply_markup: { inline_keyboard: [
+        [{ text: 'View Countdown', hide: false, web_app: { url: `https://mini.example/mini-app/countdown?view=detail&id=${id}` } }],
+        [{ text: 'Back', hide: false, callback_data: 'feature:plan-countdown' },
+          { text: 'Main Menu', hide: false, callback_data: 'nav:home' }],
+      ] },
+    }));
+  });
+
   it('opens Birthday Reminder directly as an owner-only Mini App', async () => {
     const findUnique = vi.fn().mockResolvedValueOnce(null).mockResolvedValueOnce({ day: 29 });
     const database = { birthday: { findUnique } } as unknown as PrismaClient;

@@ -58,6 +58,81 @@ describe('Mini App API', () => {
     vi.restoreAllMocks();
   });
 
+  it('authenticates the countdown owner and isolates PRELAUNCH reads and writes from the database', async () => {
+    const port = await getFreePort();
+    const lookup = vi.fn();
+    const writes = vi.fn();
+    const server = createMiniAppServer(
+      { ...config, miniAppPort: port },
+      { $transaction: writes } as unknown as PrismaClient,
+      { getChatMember: lookup } as unknown as Telegram,
+      createLogger('silent'),
+      'test_bot',
+    );
+    await server.listen();
+    const base = `http://127.0.0.1:${port}`;
+    const post = (authorization: string, action: string) => fetch(base + '/api/countdowns', {
+      method: 'POST',
+      headers: { Authorization: authorization, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action }),
+    });
+    try {
+      expect((await fetch(base + '/mini-app/countdown')).status).toBe(200);
+      expect((await post('tma ' + signedInitData(73), 'session')).status).toBe(403);
+      expect((await post('tma ' + signedInitData(42) + 'x', 'session')).status).toBe(403);
+      const owner = await post('tma ' + signedInitData(42), 'session');
+      expect(owner.status).toBe(200);
+      expect(await owner.json()).toMatchObject({
+        preview: true,
+        messages: [
+          { kind: 'ANNOUNCEMENT' },
+          { kind: 'DAY_BEFORE' },
+          { kind: 'SIX_HOURS_BEFORE' },
+          { kind: 'HOUR_BEFORE' },
+          { kind: 'AT_START', variants: expect.arrayContaining([expect.stringContaining('Weekend picnic')]) },
+        ],
+      });
+      expect((await post('tma ' + signedInitData(42), 'upcoming')).status).toBe(403);
+      expect(lookup).not.toHaveBeenCalled();
+      expect(writes).not.toHaveBeenCalled();
+    } finally {
+      await server.close();
+    }
+  });
+
+  it('lets eligible LIVE members view shared countdowns and rejects departed members', async () => {
+    const port = await getFreePort();
+    const upsert = vi.fn();
+    const findMany = vi.fn().mockResolvedValue([]);
+    const db = {
+      $transaction: async (work: (tx: object) => Promise<unknown>) => work({
+        telegramGroup: { upsert }, member: { upsert }, groupMembership: { upsert },
+      }),
+      planCountdown: { findMany },
+    } as unknown as PrismaClient;
+    const getChatMember = vi.fn().mockResolvedValueOnce({ status: 'member' }).mockResolvedValueOnce({ status: 'left' });
+    const server = createMiniAppServer(
+      { ...config, miniAppPort: port, accessMode: 'LIVE' },
+      db, { getChatMember } as unknown as Telegram, createLogger('silent'),
+    );
+    await server.listen();
+    const post = (id: number) => fetch(`http://127.0.0.1:${port}/api/countdowns`, {
+      method: 'POST',
+      headers: { Authorization: 'tma ' + signedInitData(id), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'upcoming' }),
+    });
+    try {
+      const allowed = await post(73);
+      expect(allowed.status).toBe(200);
+      expect(await allowed.json()).toMatchObject({ plans: [] });
+      expect((await post(74)).status).toBe(403);
+      expect(findMany).toHaveBeenCalledOnce();
+      expect(getChatMember.mock.calls).toEqual([[String(config.groupId), 73], [String(config.groupId), 74]]);
+    } finally {
+      await server.close();
+    }
+  });
+
   it('serves the embedded form assets with exact MMK defaults and title labeling', async () => {
     const port = await getFreePort();
     const server = createMiniAppServer(
@@ -111,7 +186,7 @@ describe('Mini App API', () => {
     });
 
     try {
-      for (const path of ['/api/smart-polls', '/api/budget-votes']) {
+      for (const path of ['/api/smart-polls', '/api/budget-votes', '/api/countdowns']) {
         const allowed = await preflight(path, productionOrigin);
         expect(allowed.status).toBe(204);
         expect(allowed.headers.get('access-control-allow-origin')).toBe(productionOrigin);

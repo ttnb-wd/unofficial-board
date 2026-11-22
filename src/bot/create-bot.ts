@@ -11,6 +11,7 @@ import { registerSmartPollHandlers } from '../features/smart-poll/bot.js';
 import type { createLogger } from '../logger.js';
 import { registerBirthdayMenu } from '../features/birthday-reminder/bot.js';
 import { registerBillMenus } from '../features/bill-splitter/bot.js';
+import { countdownKeyboard, registerCountdownMenu } from '../features/plan-countdown/bot.js';
 import { registerVoting } from './voting.js';
 import {
   dashboardKeyboard,
@@ -23,7 +24,7 @@ function errorName(error: unknown): string {
 }
 
 function dashboardText(): string {
-  return `The Unofficial Board\n\nChoose a feature to get started. Smart Poll, Group Budget Vote, Bill Splitter, and Birthday Reminder are available.\n\n${features.map((feature) => `• ${feature.title}`).join('\n')}`;
+  return `The Unofficial Board\n\nChoose a feature to get started. Smart Poll, Group Budget Vote, Bill Splitter, Birthday Reminder, and Plan Countdown are available.\n\n${features.map((feature) => `• ${feature.title}`).join('\n')}`;
 }
 
 export function createBot(
@@ -105,6 +106,7 @@ export function createBot(
 
   registerBillMenus(bot, config, authorize);
   registerBirthdayMenu(bot, config, database, authorize);
+  registerCountdownMenu(bot, config, authorize);
   registerVoting(bot, config, database, botUsername, authorize);
 
   bot.start(async (ctx) => {
@@ -119,6 +121,12 @@ export function createBot(
     }
     if (access === 'unavailable') {
       await ctx.reply('I could not verify your group access. Please try again later.');
+      return;
+    }
+
+    const countdownId = /^countdown_([0-9a-f-]{36})$/.exec(ctx.startPayload)?.[1];
+    if (countdownId && config.accessMode === 'LIVE') {
+      await ctx.reply('Plan Countdown', countdownKeyboard(config, countdownId));
       return;
     }
 

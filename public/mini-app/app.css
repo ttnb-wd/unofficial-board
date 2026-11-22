@@ -290,3 +290,56 @@ button[aria-pressed="true"] { border-color: var(--feature-heading); }
 .birthday-picker > label { grid-row: 1; margin: 0; }
 .birthday-picker > select { grid-row: 2; }
 .birthday-remove { width: 100%; margin-top: 10px; }
+/* Plan Countdown */
+.countdown-date {
+  display: grid;
+  grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr);
+  gap: 8px;
+  margin-block: 14px;
+}
+.countdown-date input { padding-inline: 6px; }
+.countdown-date legend { color: var(--feature-heading); }
+.countdown-muted { color: var(--text-secondary); font-weight: 400; }
+#plan-description { resize: vertical; }
+#plan-form .primary-button { margin-top: 12px; }
+.countdown-content { display: grid; gap: 10px; }
+.countdown-content h2 { margin: 0; line-height: 1.2; }
+.countdown-content p { margin: 8px 0; }
+.countdown-copy { white-space: pre-wrap; }
+.countdown-tiles {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 5px;
+  margin-block: 14px;
+}
+.countdown-tile {
+  display: grid;
+  gap: 4px;
+  padding: 10px 1px;
+  border-radius: var(--radius-control);
+  background: var(--feature-tint);
+  color: var(--feature-heading);
+  text-align: center;
+}
+.countdown-tile strong {
+  font-size: clamp(16px, 6vw, 30px);
+  font-variant-numeric: tabular-nums;
+  line-height: 1.2;
+}
+.countdown-tile span { font-size: 11px; }
+.countdown-state { color: var(--feature-heading); font-weight: 650; }
+.countdown-list-card .countdown-tiles { margin-block: 4px 0; }
+.countdown-list-card .countdown-tile span { font-size: 11px; }
+.countdown-list-card .countdown-tile strong { font-size: clamp(16px, 5vw, 23px); }
+.countdown-list-card .countdown-state { margin: 4px 0 0; }
+.countdown-pager { align-items: center; justify-content: space-between; }
+.countdown-list-card { margin: 0; padding: 10px 14px 12px; }
+.countdown-list-card p { margin: 0 0 6px; font-size: 14px; }
+.countdown-list-title {
+  padding: 4px 0;
+  background: transparent;
+  color: var(--feature-heading);
+  text-align: left;
+  font-size: 17px;
+}
+.countdown-list-card .countdown-tile { padding-block: 6px; }

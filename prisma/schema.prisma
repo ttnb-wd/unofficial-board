@@ -444,3 +444,57 @@ model BirthdayDelivery {
   @@id([groupId, memberId, year])
   @@index([groupId, status, nextAttemptAt])
 }
+
+model PlanCountdown {
+  id          String                  @id @default(uuid())
+  groupId     BigInt
+  creatorId   BigInt
+  requestId   String
+  title       String
+  description String
+  startsAt    DateTime                @db.Timestamptz(3)
+  timeZone    String
+  version     Int                     @default(1)
+  cancelledAt DateTime?               @db.Timestamptz(3)
+  deliveries  PlanCountdownDelivery[]
+
+  @@unique([groupId, creatorId, requestId])
+  @@index([groupId, startsAt, id])
+  @@index([groupId, creatorId, startsAt, id])
+}
+
+enum CountdownDeliveryKind {
+  ANNOUNCEMENT
+  DAY_BEFORE
+  HOUR_BEFORE
+  SIX_HOURS_BEFORE
+  AT_START
+}
+
+enum CountdownDeliveryStatus {
+  QUEUED
+  SENDING
+  SENT
+  FAILED
+  UNKNOWN
+  SKIPPED
+  MISSED
+}
+
+model PlanCountdownDelivery {
+  countdownId       String
+  kind              CountdownDeliveryKind
+  status            CountdownDeliveryStatus @default(QUEUED)
+  scheduledAt       DateTime                @db.Timestamptz(3)
+  deliveredAt       DateTime?               @db.Timestamptz(3)
+  startVariant      Int?
+  nextAttemptAt     DateTime                @db.Timestamptz(3)
+  expiresAt         DateTime                @db.Timestamptz(3)
+  attemptAt         DateTime?               @db.Timestamptz(3)
+  attempts          Int                     @default(0)
+  telegramMessageId Int?
+  countdown         PlanCountdown           @relation(fields: [countdownId], references: [id], onDelete: Restrict)
+
+  @@id([countdownId, kind])
+  @@index([status, nextAttemptAt])
+}

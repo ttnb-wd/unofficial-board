@@ -15,6 +15,8 @@ import { deliverBills } from '../features/bill-splitter/delivery.js';
 import { handleBirthdayAction } from '../features/birthday-reminder/api.js';
 import { deliverBirthdays } from '../features/birthday-reminder/delivery.js';
 import { BillError, maxProofBytes } from '../features/bill-splitter/rules.js';
+import { handleCountdownAction } from '../features/plan-countdown/api.js';
+import { deliverCountdowns } from '../features/plan-countdown/delivery.js';
 import { validateTelegramInitData } from './init-data.js';
 import {
   budgetVoteSubmissionSchema,
@@ -486,13 +488,16 @@ async function saveBudgetVote(
 
 async function serveAsset(
   response: ServerResponse,
-  fileName: 'index.html' | 'app.css' | 'app.js' | 'config.js' | 'bills.html' | 'bills.js' | 'birthday.html' | 'birthday.js',
+  fileName: 'index.html' | 'app.css' | 'app.js' | 'config.js' | 'bills.html' | 'bills.js' | 'birthday.html' | 'birthday.js' | 'countdown.html' | 'countdown.js' | 'countdown-clock.js',
 ): Promise<void> {
   const contentTypes = {
     'index.html': 'text/html; charset=utf-8',
     'bills.html': 'text/html; charset=utf-8',
     'bills.js': 'text/javascript; charset=utf-8',
     'birthday.html': 'text/html; charset=utf-8',
+    'countdown.html': 'text/html; charset=utf-8',
+    'countdown.js': 'text/javascript; charset=utf-8',
+    'countdown-clock.js': 'text/javascript; charset=utf-8',
     'birthday.js': 'text/javascript; charset=utf-8',
     'app.css': 'text/css; charset=utf-8',
     'app.js': 'text/javascript; charset=utf-8',
@@ -538,7 +543,14 @@ export function createMiniAppServer(
   let deliveryTimer: NodeJS.Timeout | undefined;
   let pendingBirthdayDelivery: Promise<void> | undefined;
   let birthdayTimer: NodeJS.Timeout | undefined;
+  let pendingCountdownDelivery: Promise<void> | undefined;
   let closing = false;
+  const kickCountdowns = () => {
+    if (closing || pendingCountdownDelivery || !botUsername || config.accessMode !== 'LIVE') return;
+    pendingCountdownDelivery = deliverCountdowns(database, telegram, config, botUsername)
+      .catch((error: unknown) => logger.warn({ errorName: errorName(error) }, 'Countdown delivery worker failed'))
+      .finally(() => { pendingCountdownDelivery = undefined; });
+  };
   const kick = () => {
     if (closing || pendingDelivery || !botUsername || config.accessMode !== 'LIVE') return;
     pendingDelivery = deliverBills(database, telegram, config, botUsername)
@@ -558,12 +570,13 @@ export function createMiniAppServer(
         : url.pathname === '/api/budget-votes' ? 'budget' : null;
       const isBill = url.pathname === '/api/bills';
       const isBirthday = url.pathname === '/api/birthdays';
+      const isCountdown = url.pathname === '/api/countdowns';
       const isHealth = url.pathname === '/healthz';
-      if ((feature || isBill || isBirthday || isHealth) && !allowApiOrigin(request, response, frontendOrigin)) {
+      if ((feature || isBill || isBirthday || isCountdown || isHealth) && !allowApiOrigin(request, response, frontendOrigin)) {
         sendJson(response, 403, { error: 'Origin is not allowed.' });
         return;
       }
-      if (request.method === 'OPTIONS' && (feature || isBill || isBirthday)) {
+      if (request.method === 'OPTIONS' && (feature || isBill || isBirthday || isCountdown)) {
         if (request.headers['access-control-request-method'] !== 'POST') {
           sendJson(response, 405, { error: 'Method is not allowed.' });
           return;
@@ -578,6 +591,7 @@ export function createMiniAppServer(
         return;
       }
       if (request.method === 'GET' && isHealth) {
+        kickCountdowns();
         sendJson(response, 200, { status: 'ok' });
         return;
       }
@@ -591,6 +605,15 @@ export function createMiniAppServer(
             return;
           case '/mini-app/bills.js':
             await serveAsset(response, 'bills.js');
+            return;
+          case '/mini-app/countdown':
+            await serveAsset(response, 'countdown.html');
+            return;
+          case '/mini-app/countdown.js':
+            await serveAsset(response, 'countdown.js');
+            return;
+          case '/mini-app/countdown-clock.js':
+            await serveAsset(response, 'countdown-clock.js');
             return;
           case '/mini-app/birthday':
             await serveAsset(response, 'birthday.html');
@@ -608,6 +631,33 @@ export function createMiniAppServer(
             await serveAsset(response, 'config.js');
             return;
         }
+      }
+      if (request.method === 'POST' && isCountdown) {
+        const identity = await authorizeRequest(request, config, database, telegram);
+        if (!identity) {
+          sendJson(response, 403, { error: 'Access could not be verified. Reopen Plan Countdown from the private bot chat.' });
+          return;
+        }
+        if (request.headers['content-type']?.split(';')[0] !== 'application/json') {
+          sendJson(response, 415, { error: 'JSON is required.' });
+          return;
+        }
+        let body: unknown;
+        try {
+          body = await readJsonBody(request);
+        } catch (error) {
+          sendJson(response, error instanceof RangeError ? 413 : 400, { error: 'The request could not be read.' });
+          return;
+        }
+        const result = await handleCountdownAction(body, identity.userId, config, database);
+        sendJson(response, result.status, {
+          ...result.body,
+          ...(result.status === 200 && botUsername && /^[a-zA-Z0-9_]+$/.test(botUsername)
+            ? { dashboardUrl: `https://t.me/${botUsername}?start=dashboard` }
+            : {}),
+        });
+        if (result.status === 201) kickCountdowns();
+        return;
       }
       if (request.method === 'POST' && isBirthday) {
         const identity = await authorizeRequest(request, config, database, telegram);
@@ -695,7 +745,11 @@ export function createMiniAppServer(
           }
           if (config.accessMode === 'LIVE') {
             kickBirthdays();
-            birthdayTimer = setInterval(kickBirthdays, 60_000);
+            kickCountdowns();
+            birthdayTimer = setInterval(() => {
+              kickBirthdays();
+              kickCountdowns();
+            }, 60_000);
             birthdayTimer.unref();
           }
           resolveListen();
@@ -720,6 +774,7 @@ export function createMiniAppServer(
       });
       await pendingDelivery;
       await pendingBirthdayDelivery;
+      await pendingCountdownDelivery;
     },
   };
 }

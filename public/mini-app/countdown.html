@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en" data-feature="plan-countdown">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
+  <title>Plan Countdown · The Unofficial Board</title>
+  <link rel="stylesheet" href="/mini-app/app.css">
+  <script defer src="https://telegram.org/js/telegram-web-app.js"></script>
+  <script defer src="/mini-app/config.js"></script>
+  <script type="module" src="/mini-app/countdown.js"></script>
+</head>
+<body>
+  <main class="shell">
+    <header class="feature-hero">
+      <p class="bill-badge" id="preview" hidden>PRELAUNCH · Simulation</p>
+      <h1 id="heading" tabindex="-1">Plan Countdown</h1>
+    </header>
+    <p class="error" id="error" role="alert" hidden></p>
+    <p class="bill-card" id="loading" role="status">Opening Plan Countdown…</p>
+    <form id="plan-form" hidden>
+      <label for="plan-title">Plan title</label>
+      <input id="plan-title" name="title" maxlength="80" required>
+      <fieldset class="countdown-date">
+        <legend>Event time · Asia/Yangon</legend>
+        <div>
+          <label for="plan-date">Date</label>
+          <input id="plan-date" name="date" type="date" min="1000-01-01" max="9999-12-31" required>
+        </div>
+        <div>
+          <label for="plan-time">Time</label>
+          <input id="plan-time" name="time" type="time" required>
+        </div>
+      </fieldset>
+      <label for="plan-description">Description <span class="countdown-muted">(optional)</span></label>
+      <textarea id="plan-description" name="description" maxlength="240" rows="2"></textarea>
+      <button class="primary-button" id="save" type="submit">Create</button>
+    </form>
+    <section id="content" class="countdown-content" hidden></section>
+    <nav class="bill-actions" id="navigation" aria-label="Navigation" hidden>
+      <button id="back" type="button">Back</button>
+      <button id="main-menu" type="button">Main Menu</button>
+    </nav>
+  </main>
+</body>
+</html>
