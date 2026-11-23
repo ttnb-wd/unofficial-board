@@ -61,7 +61,9 @@ describe('Mini App API', () => {
   it('serves Dashboard Home and reads only the owner’s preview data in PRELAUNCH', async () => {
     const port = await getFreePort();
     const createdAt = new Date('2026-11-20T12:00:00Z');
-    const findPolls = vi.fn().mockResolvedValue([{ question: 'Where next?', status: 'PRELAUNCH_PREVIEW', createdAt }]);
+    const findPolls = vi.fn()
+      .mockResolvedValueOnce([{ question: 'Where next?', status: 'PRELAUNCH_PREVIEW', createdAt }])
+      .mockResolvedValue([{ id: 'poll1', question: 'Where next?', status: 'PRELAUNCH_PREVIEW' }]);
     const findBirthday = vi.fn().mockResolvedValue({ month: 11, day: 23 });
     const forbidden = vi.fn(() => { throw new Error('Preview accessed live group state'); });
     const database = {
@@ -81,6 +83,11 @@ describe('Mini App API', () => {
     const post = (authorization: string) => fetch(base + '/api/dashboard', {
       method: 'POST', headers: { Authorization: authorization },
     });
+    const votes = (userId: number, kind: 'poll' | 'bv') => fetch(base + '/api/votes', {
+      method: 'POST',
+      headers: { Authorization: 'tma ' + signedInitData(userId), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'list', kind, page: 0 }),
+    });
     try {
       expect(await (await fetch(base + '/mini-app')).text()).toContain('id="board-home"');
       for (const asset of ['board.js', 'home.js', 'votes.js', 'icons.svg', 'board-logo.png', 'welcome.webp', 'poll.webp', 'budget.webp', 'bill.webp']) {
@@ -89,6 +96,7 @@ describe('Mini App API', () => {
       expect((await post('')).status).toBe(403);
       expect((await post('tma ' + signedInitData(73))).status).toBe(403);
       expect((await fetch(base + '/api/votes', { method: 'POST' })).status).toBe(403);
+      expect((await votes(73, 'poll')).status).toBe(403);
       expect(findPolls).not.toHaveBeenCalled();
       const response = await post('tma ' + signedInitData(42));
       expect(response.status).toBe(200);
@@ -105,6 +113,14 @@ describe('Mini App API', () => {
       expect(findBirthday).toHaveBeenCalledWith(expect.objectContaining({
         where: { groupId_memberId_preview: { groupId: config.groupId, memberId: 42n, preview: true } },
       }));
+      expect(forbidden).not.toHaveBeenCalled();
+      for (const [kind, payload] of [['poll', 'polls'], ['bv', 'budgets']] as const) {
+        const response = await votes(42, kind);
+        expect(response.status).toBe(200);
+        expect(await response.json()).toMatchObject({
+          preview: true, managementUrl: `https://t.me/test_bot?start=${payload}`,
+        });
+      }
       expect(forbidden).not.toHaveBeenCalled();
     } finally {
       await server.close();

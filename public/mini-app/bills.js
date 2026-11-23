@@ -295,7 +295,11 @@ async function list(view) {
   const selected = view.split(':')[1] ?? (view === 'debts' ? 'debts' : 'all');
   const items = card();
   const navActions = mine ? el('div', '', 'bill-actions') : ledgerViews(selected);
-  if (mine) navActions.append(button('Create Bill', () => open('create')), button('Group Debt Ledger', () => open('ledger')));
+  if (mine) navActions.append(
+    button('Create Bill', () => open('create')),
+    button('My Debts', () => open('debts')),
+    button('Group Debt Ledger', () => open('ledger')),
+  );
   function add(itemsList) {
     for (const item of itemsList) {
       const target = `bill:${mine ? item.id : item.billId}`;

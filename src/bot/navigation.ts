@@ -1,11 +1,17 @@
 import { Markup } from 'telegraf';
 import type { Context } from 'telegraf';
 import { features } from '../features/index.js';
+import type { AppConfig } from '../config.js';
+import { buildFeatureHomeUrl } from '../mini-app/urls.js';
 
-export function dashboardKeyboard() {
-  const featureButtons = features.map((feature) =>
-    Markup.button.callback(feature.title, `feature:${feature.id}`),
-  );
+export function dashboardKeyboard(config: AppConfig) {
+  // The private dashboard is rendered only after access is checked.
+  const featureButtons = features.map((feature) => {
+    const url = buildFeatureHomeUrl(config, feature.id);
+    return url
+      ? Markup.button.webApp(feature.title, url)
+      : Markup.button.callback(feature.title, `feature:${feature.id}`);
+  });
   const rows = [];
   for (let index = 0; index < featureButtons.length; index += 2) {
     rows.push(featureButtons.slice(index, index + 2));

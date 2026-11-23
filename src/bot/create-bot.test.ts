@@ -150,6 +150,25 @@ describe('PRELAUNCH bot access', () => {
     }));
   });
 
+  it('uses a private bot deep link for the group menu in a simulated LIVE update', async () => {
+    const upsert = vi.fn();
+    const database = {
+      $transaction: async (work: (tx: object) => Promise<unknown>) => work({
+        telegramGroup: { upsert }, member: { upsert }, groupMembership: { upsert },
+      }),
+    } as unknown as PrismaClient;
+    const { bot, apiCall, membershipCheck } = setupBot(database, { ...config, accessMode: 'LIVE' });
+    membershipCheck.mockResolvedValue({
+      status: 'member', user: { id: 73, is_bot: false, first_name: 'Fixture member' },
+    });
+    await bot.handleUpdate(messageUpdate(73, { id: Number(config.groupId), type: 'supergroup', title: 'Fixture group' }, '/menu'));
+    expect(apiCall).toHaveBeenCalledWith('sendMessage', expect.objectContaining({
+      reply_markup: { inline_keyboard: [[{
+        text: 'Open private dashboard', url: 'https://t.me/test_bot?start=dashboard', hide: false,
+      }]] },
+    }));
+  });
+
   it('opens Birthday Reminder directly as an owner-only Mini App', async () => {
     const findUnique = vi.fn().mockResolvedValueOnce(null).mockResolvedValueOnce({ day: 29 });
     const database = { birthday: { findUnique } } as unknown as PrismaClient;
@@ -175,16 +194,51 @@ describe('PRELAUNCH bot access', () => {
     expect(membershipCheck).not.toHaveBeenCalled();
   });
 
-  it('lets the configured owner use the private dashboard without checking group membership', async () => {
+  it.each(['/start', '/menu', 'nav:home', 'nav:back'])('opens six feature homes from %s', async (entry) => {
     const { bot, database, apiCall, membershipCheck } = setupBot();
 
-    await bot.handleUpdate(
-      messageUpdate(42, { id: 42, type: 'private', first_name: 'Owner' }, '/start'),
-    );
+    const command = entry.startsWith('/');
+    await bot.handleUpdate(command
+      ? messageUpdate(42, { id: 42, type: 'private', first_name: 'Owner' }, entry)
+      : callbackUpdate(42, entry));
 
-    expect(apiCall).toHaveBeenCalledOnce();
+    const screen = apiCall.mock.calls.find(([method]) => method === (command ? 'sendMessage' : 'editMessageText'))?.[1];
+    const webApp = (text: string, path: string) => ({ text, hide: false, web_app: { url: 'https://mini.example' + path } });
+    expect(screen).toMatchObject({
+      reply_markup: { inline_keyboard: [
+        [webApp('Smart Poll', '/mini-app?feature=poll&view=votes'), webApp('Bill Splitter', '/mini-app/bills?view=mine')],
+        [webApp('Birthday Reminder', '/mini-app/birthday'), { text: 'Shared Memory Vault', callback_data: 'feature:shared-memory-vault' }],
+        [webApp('Plan Countdown', '/mini-app/countdown'), webApp('One Tap Hangout', '/mini-app/hangout')],
+        [webApp('Group Budget Vote', '/mini-app?feature=budget&view=votes')],
+      ] },
+    });
     expect(membershipCheck).not.toHaveBeenCalled();
     expect(database.$transaction).not.toHaveBeenCalled();
+  });
+
+  it('keeps callback menus when an HTTPS launch URL is unavailable', async () => {
+    const { bot, apiCall } = setupBot(undefined, { ...config, miniAppUrl: 'http://localhost:3000' });
+    await bot.handleUpdate(messageUpdate(42, { id: 42, type: 'private', first_name: 'Owner' }, '/menu'));
+    const keyboard = apiCall.mock.calls.find(([method]) => method === 'sendMessage')?.[1];
+    expect(JSON.stringify(keyboard)).not.toContain('web_app');
+    expect(JSON.stringify(keyboard)).toContain('"callback_data":"feature:bill-splitter"');
+  });
+
+  it.each(['polls', 'budgets'])('opens %s management only for the PRELAUNCH owner', async (payload) => {
+    const findMany = vi.fn().mockResolvedValue([]);
+    const database = { smartPoll: { findMany }, budgetVote: { findMany } } as unknown as PrismaClient;
+    const { bot, apiCall, membershipCheck } = setupBot(database);
+    const start = (id: number) => bot.handleUpdate(messageUpdate(id,
+      { id, type: 'private', first_name: 'Tester' }, `/start ${payload}`));
+    await start(73);
+    expect(findMany).not.toHaveBeenCalled();
+    expect(apiCall).not.toHaveBeenCalled();
+    await start(42);
+    expect(findMany).toHaveBeenCalledWith(expect.objectContaining({ where: { groupId: config.groupId, creatorId: 42n } }));
+    expect(apiCall).toHaveBeenCalledWith('sendMessage', expect.objectContaining({
+      text: expect.stringContaining(payload === 'polls' ? 'My polls' : 'My budget votes'),
+    }));
+    expect(membershipCheck).not.toHaveBeenCalled();
   });
 
   it('keeps the private menu available to the owner', async () => {

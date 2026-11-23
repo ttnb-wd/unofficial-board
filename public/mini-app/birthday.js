@@ -1,7 +1,9 @@
 (() => {
   const telegram = window.Telegram?.WebApp;
   const api = window.BOARD_API_ORIGIN ?? '';
-  const view = new URLSearchParams(window.location.search).get('view');
+  const params = new URLSearchParams(window.location.search);
+  const view = params.get('view');
+  const ui = window.BoardUI;
   const titles = { upcoming: 'Upcoming Birthdays', preview: 'Group Announcement Preview' };
   const get = (id) => document.getElementById(`birthday-${id}`);
   const form = get('form');
@@ -15,6 +17,10 @@
   const monthLabel = new Intl.DateTimeFormat('en', { month: 'long', timeZone: 'UTC' });
   let busy = false;
   let birthday = null;
+
+  function birthdayUrl(path) {
+    return ui.returnTab ? ui.featureUrl(path, ui.returnTab) : '/mini-app' + path;
+  }
 
   function message(id, value = '') {
     const node = get(id);
@@ -114,6 +120,10 @@
       } else {
         renderBirthday(session.birthday);
         form.hidden = false;
+        get('upcoming-link').href = birthdayUrl('/birthday?view=upcoming&parent=birthday');
+        get('preview-link').href = birthdayUrl('/birthday?view=preview&parent=birthday');
+        get('preview-link').hidden = !session.preview;
+        get('views').hidden = false;
       }
       message('status');
     }, 'Connecting…', true);
@@ -146,7 +156,11 @@
   });
 
   retry.addEventListener('click', load);
-  const back = () => { if (!window.BoardUI.backToBoard()) telegram?.close(); };
+  const back = () => {
+    if (Object.hasOwn(titles, view) && params.get('parent') === 'birthday') {
+      location.replace(birthdayUrl('/birthday'));
+    } else if (!ui.backToBoard()) telegram?.close();
+  };
   get('back').addEventListener('click', back);
   telegram?.BackButton?.onClick(back);
   telegram?.BackButton?.show();

@@ -8,7 +8,13 @@
   const supported = feature === 'poll' || feature === 'budget';
   if (feature === null || (supported && params.get('view') === 'votes')) return;
   const ui = window.BoardUI;
-  const leave = () => { if (!ui.backToBoard()) webApp?.close(); };
+  const fromVotes = supported && params.get('from') === 'votes';
+  const votesPage = `?feature=${feature}&view=votes`;
+  const leave = () => {
+    if (fromVotes) location.replace('/mini-app' + votesPage);
+    else if (!ui.backToBoard()) webApp?.close();
+  };
+  if (fromVotes) ui.onFeatureBack = leave;
   document.querySelector('#form-hero').hidden = false;
   const isBudget = feature === 'budget';
   const labels = isBudget
@@ -114,7 +120,7 @@
     mine.append(ui.icon('list'), document.createTextNode(mineLabel));
     mine.hidden = false;
     const votes = document.querySelector('#form-votes');
-    votes.href = ui.featureUrl(`?feature=${feature}&view=votes`, ui.returnTab ?? 'home');
+    votes.href = fromVotes ? '/mini-app' + votesPage : ui.featureUrl(votesPage, ui.returnTab ?? 'home');
     votes.append(ui.icon('check'), document.createTextNode('Voting and results'));
     votes.hidden = false;
     form.hidden = false;

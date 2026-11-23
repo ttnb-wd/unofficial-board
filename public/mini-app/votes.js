@@ -15,7 +15,7 @@
   const page = Math.min(9999, Math.max(0, Number.parseInt(params.get('page'), 10) || 0));
   const browse = `?feature=${feature}&view=votes`;
   const overview = feature === 'poll' ? 'Smart Poll' : 'Group Budget Vote';
-  const destination = (path) => ui.featureUrl(path, ui.returnTab ?? 'home');
+  const destination = (path) => ui.returnTab ? ui.featureUrl(path, ui.returnTab) : '/mini-app' + path;
   let busy = false;
 
   function button(label, onClick, className) {
@@ -64,7 +64,7 @@
     title.before(element('p', 'bill-badge', 'PRELAUNCH · Simulation'));
   }
 
-  function showList({ records, preview, more }) {
+  function showList({ records, preview, more, managementUrl }) {
     showPreview(preview);
     intro.textContent = preview ? 'Try a saved ballot in the owner preview.' : 'Open a published ballot to vote or see the results.';
     const actions = element('section', 'dashboard-card');
@@ -84,7 +84,17 @@
       if (more) pages.append(link('Next', listPath(page + 1)));
       actions.append(pages);
     }
-    root.replaceChildren(actions, link(feature === 'poll' ? 'Create a Poll' : 'Create Budget Vote', `?feature=${feature}`));
+    const create = link(feature === 'poll' ? 'Create a Poll' : 'Create Budget Vote',
+      `?feature=${feature}${ui.returnTab ? '' : '&from=votes'}`);
+    const controls = element('div', 'bill-actions');
+    controls.append(create);
+    if (managementUrl) {
+      const management = element('a', 'secondary-button', feature === 'poll' ? 'Manage My Polls' : 'Manage My Budget Votes');
+      management.href = managementUrl;
+      management.addEventListener('click', ui.openBot);
+      controls.append(management);
+    }
+    root.replaceChildren(controls, actions);
   }
 
   function resultCard(data, hidden) {

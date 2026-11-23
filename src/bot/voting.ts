@@ -208,6 +208,9 @@ export function registerVoting(
     showList(ctx, ctx.match[1] as Kind, ctx.match[2] as View, Number(ctx.match[3] ?? 0)));
 
   bot.start(async (ctx, next) => {
+    if (ctx.payload === 'polls' || ctx.payload === 'budgets') {
+      return showList(ctx, ctx.payload === 'polls' ? 'poll' : 'bv', 'mine', 0);
+    }
     const match = /^vote_(poll|bv)_([a-z0-9]{1,30})$/.exec(ctx.payload);
     if (!match) return next();
     if (!await allowed(ctx)) return;

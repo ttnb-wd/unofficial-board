@@ -58,7 +58,12 @@ export async function handleVoteAction(
   const input = parsed.data;
   const preview = config.accessMode === 'PRELAUNCH';
   if (preview && userId !== config.prelaunchOwnerId) return reject(403, 'Owner preview only.');
-  if (input.action === 'list') return accept(await list(database, config, userId, input.kind, input.page));
+  if (input.action === 'list') {
+    const result = await list(database, config, userId, input.kind, input.page);
+    const managementUrl = botUsername && /^[a-zA-Z0-9_]+$/.test(botUsername)
+      ? `https://t.me/${botUsername}?start=${input.kind === 'poll' ? 'polls' : 'budgets'}` : undefined;
+    return accept({ ...result, managementUrl });
+  }
 
   const record = await loadVote(database, config.groupId, input.kind, input.id);
   const allowed = record && (preview

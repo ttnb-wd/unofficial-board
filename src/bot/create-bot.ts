@@ -63,7 +63,7 @@ export function createBot(
         await ctx.reply('I could not verify your group access. Please try again later.');
         return;
       }
-      await ctx.reply(dashboardText(), dashboardKeyboard());
+      await ctx.reply(dashboardText(), dashboardKeyboard(config));
       return;
     }
 
@@ -141,7 +141,7 @@ export function createBot(
 
     await ctx.reply(
       dashboardText(),
-      dashboardKeyboard(),
+      dashboardKeyboard(config),
     );
   });
 
@@ -154,7 +154,7 @@ export function createBot(
       return;
     }
     await ctx.answerCbQuery();
-    await showScreen(ctx, 'Switch cancelled. Your draft is unchanged.', dashboardKeyboard());
+    await showScreen(ctx, 'Switch cancelled. Your draft is unchanged.', dashboardKeyboard(config));
   });
 
   bot.command('cancel', async (ctx) => {
@@ -222,7 +222,7 @@ export function createBot(
     }
 
     await ctx.answerCbQuery();
-    await showScreen(ctx, dashboardText(), dashboardKeyboard());
+    await showScreen(ctx, dashboardText(), dashboardKeyboard(config));
   });
 
   bot.on('callback_query', async (ctx) => {
