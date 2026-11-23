@@ -1,10 +1,14 @@
 import { createHmac } from 'node:crypto';
 import { createServer as createNetServer } from 'node:net';
-import type { PrismaClient } from '@prisma/client';
-import type { Telegram } from 'telegraf';
+import { randomUUID } from 'node:crypto';
+import { PrismaClient } from '@prisma/client';
+import { Telegram } from 'telegraf';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { AppConfig } from '../config.js';
 import { createLogger } from '../logger.js';
+import type { Update } from 'telegraf/types';
+import { createBot } from '../bot/create-bot.js';
+import { refreshGroupMessages } from '../features/group-message.js';
 import { createMiniAppServer } from './server.js';
 
 const config: AppConfig = {
@@ -20,7 +24,6 @@ const config: AppConfig = {
 function signedInitData(userId: number): string {
   const params = new URLSearchParams({
     auth_date: String(Math.floor(Date.now() / 1000)),
-    query_id: 'test-query',
     user: JSON.stringify({ id: userId, first_name: 'Tester' }),
   });
   const checkString = [...params.entries()]
@@ -62,7 +65,7 @@ describe('Mini App API', () => {
     const port = await getFreePort();
     const createdAt = new Date('2026-11-20T12:00:00Z');
     const findPolls = vi.fn()
-      .mockResolvedValueOnce([{ question: 'Where next?', status: 'PRELAUNCH_PREVIEW', createdAt }])
+      .mockResolvedValueOnce([{ id: 'poll1', question: 'Where next?', status: 'PRELAUNCH_PREVIEW', createdAt }])
       .mockResolvedValue([{ id: 'poll1', question: 'Where next?', status: 'PRELAUNCH_PREVIEW' }]);
     const findBirthday = vi.fn().mockResolvedValue({ month: 11, day: 23 });
     const forbidden = vi.fn(() => { throw new Error('Preview accessed live group state'); });
@@ -103,8 +106,8 @@ describe('Mini App API', () => {
       expect(await response.json()).toEqual({
         name: 'Tester', preview: true,
         birthday: { date: { month: 11, day: 23 } },
-        polls: [{ title: 'Where next?', status: 'PRELAUNCH_PREVIEW', createdAt: createdAt.toISOString() }],
-        budgets: [], plans: null, hangouts: null, birthdays: null, bills: null,
+        polls: [{ id: 'poll1', title: 'Where next?', status: 'PRELAUNCH_PREVIEW', createdAt: createdAt.toISOString() }],
+        budgets: [], plans: null, hangouts: null, birthdays: null, bills: null, debts: null,
         dashboardUrl: 'https://t.me/test_bot?start=dashboard',
       });
       expect(findPolls).toHaveBeenCalledWith(expect.objectContaining({
@@ -452,4 +455,111 @@ describe('Mini App API', () => {
       await server.close();
     }
   });
+});
+
+const boardTestUrl = process.env.BOARD_TEST_DATABASE_URL;
+if (boardTestUrl) {
+  const target = new URL(boardTestUrl);
+  if (!['127.0.0.1', 'localhost', '[::1]'].includes(target.hostname) || target.pathname !== '/board_unified_test') {
+    throw new Error('Board integration tests require the isolated local board_unified_test database.');
+  }
+}
+
+describe.skipIf(!boardTestUrl)('shared Telegram and Mini App activity on isolated PostgreSQL', () => {
+  it('publishes once, shares ballots in both directions, and edits the original group message', async () => {
+    const db = new PrismaClient({ datasourceUrl: boardTestUrl! });
+    const groupId = -BigInt(Date.now());
+    const live = { ...config, groupId, accessMode: 'LIVE' as const, miniAppPort: await getFreePort() };
+    const logger = createLogger('silent');
+    const bot = createBot(live, db, 'test_bot', logger);
+    let messageId = 300;
+    const calls = vi.spyOn(Telegram.prototype, 'callApi').mockImplementation(async (method, payload) =>
+      (method === 'getChatMember'
+        ? { status: 'member', user: { id: (payload as { user_id: number }).user_id, first_name: 'Tester', is_bot: false } }
+        : { message_id: ++messageId }) as never);
+    bot.botInfo = {
+      id: 123456, is_bot: true, first_name: 'Test', username: 'test_bot',
+      can_join_groups: true, can_read_all_group_messages: false, supports_inline_queries: false,
+    };
+    const server = createMiniAppServer(live, db, bot.telegram, logger, 'test_bot');
+    const callback = (data: string, mid?: number): Update => ({
+      update_id: ++messageId,
+      callback_query: {
+        id: String(messageId), chat_instance: 'fixture', data,
+        from: { id: mid === undefined ? 42 : 73, first_name: 'Tester', is_bot: false },
+        message: {
+          message_id: mid ?? 1, date: 1, text: 'Fixture',
+          chat: mid === undefined ? { id: 42, type: 'private', first_name: 'Tester' }
+            : { id: Number(groupId), type: 'supergroup', title: 'Isolated fixture' },
+        },
+      },
+    });
+    const post = (path: string, body: unknown, actor = 42) => fetch(`http://127.0.0.1:${live.miniAppPort}/api/${path}`, {
+      method: 'POST',
+      headers: { Authorization: `tma ${signedInitData(actor)}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const groupSends = () => calls.mock.calls.filter(([method, payload]) =>
+      method === 'sendMessage' && (payload as { chat_id: string }).chat_id === String(groupId));
+    const identity = bot.botInfo;
+    const preview = createBot({ ...live, accessMode: 'PRELAUNCH' }, db, 'test_bot', logger);
+    preview.botInfo = identity;
+    try {
+      await server.listen();
+      for (const [kind, endpoint, key, options] of [
+        ['poll', 'smart-polls', 'options', ['Tea', 'Coffee']],
+        ['bv', 'budget-votes', 'amounts', ['10000', '9007199254740993']],
+      ] as const) {
+        calls.mockClear();
+        const draft = { requestId: randomUUID(), question: `Fixture ${kind}`, [key]: options };
+        const created = await post(endpoint, draft);
+        expect(created.status).toBe(201);
+        const { id } = await created.json();
+        expect(await (await post(endpoint, draft)).json()).toMatchObject({ id, created: false });
+        expect(groupSends()).toHaveLength(0);
+        await bot.handleUpdate(callback(`vote:${kind}:mine:0`));
+        expect(calls).toHaveBeenCalledWith('editMessageText', expect.objectContaining({
+          reply_markup: expect.objectContaining({ inline_keyboard: expect.arrayContaining([
+            [expect.objectContaining({ text: draft.question, callback_data: `vote:${kind}:owner:${id}:0` })],
+          ]) }),
+        }));
+        await preview.handleUpdate(callback(`vote:${kind}:owner:${id}:0:g`));
+        expect(calls).toHaveBeenCalledWith('editMessageText', expect.objectContaining({
+          chat_id: 42, text: expect.stringContaining('Group Publishing Preview'),
+        }));
+        await preview.handleUpdate(callback(`${kind}:publish:${id}`));
+        expect(groupSends()).toHaveLength(0);
+
+        await Promise.all([bot.handleUpdate(callback(`${kind}:publish:${id}`)), bot.handleUpdate(callback(`${kind}:publish:${id}`))]);
+        expect(groupSends()).toHaveLength(1);
+        const record = kind === 'poll' ? await db.smartPoll.findUniqueOrThrow({ where: { id } })
+          : await db.budgetVote.findUniqueOrThrow({ where: { id } });
+        const mid = record.telegramMessageId!;
+        await preview.handleUpdate(callback(`gv:${kind}:${id}:0`, mid));
+        await bot.handleUpdate(callback(`gv:${kind}:${id}:0`, mid + 99));
+        const detail = () => post('votes', { action: 'detail', kind, id }, 73).then((response) => response.json());
+        expect(await detail()).toMatchObject({ mask: 0, total: 0 });
+        await Promise.all(Array.from({ length: 2 }, () => bot.handleUpdate(callback(`gv:${kind}:${id}:0`, mid))));
+        expect(await detail()).toMatchObject({ mask: 1, total: 1, choices: [{ count: 1 }, { count: 0 }] });
+        expect((await post('votes', { action: 'submit', kind, id, mask: 2 }, 73)).status).toBe(200);
+        expect(await detail()).toMatchObject({ mask: 2, total: 1, choices: [{ count: 0 }, { count: 1 }] });
+        await Promise.all(Array.from({ length: 2 }, () => refreshGroupMessages(db, bot.telegram, live, 'test_bot')));
+        await vi.waitFor(() => expect(calls.mock.calls.filter(([method, payload]) =>
+          method === 'editMessageText' && (payload as { message_id: number }).message_id === mid)).toHaveLength(1));
+        expect(groupSends()).toHaveLength(1);
+        await bot.handleUpdate(callback(`vote:${kind}:owner:${id}:0:r`));
+        expect(calls).toHaveBeenCalledWith('editMessageText', expect.objectContaining({
+          chat_id: 42, text: expect.stringContaining('Total voters: 1'),
+        }));
+        if (kind === 'bv') expect((await detail()).choices[1].label).toBe('9,007,199,254,740,993 MMK');
+      }
+      const dashboard = await (await post('dashboard', undefined, 73)).json();
+      expect(dashboard.polls).toEqual([expect.objectContaining({ title: 'Fixture poll' })]);
+      expect(dashboard.budgets).toEqual([expect.objectContaining({ title: 'Fixture bv' })]);
+    } finally {
+      await server.close();
+      await db.$disconnect();
+      vi.restoreAllMocks();
+    }
+  }, 30_000);
 });

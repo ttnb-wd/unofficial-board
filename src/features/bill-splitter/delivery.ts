@@ -2,7 +2,8 @@ import type { PrismaClient } from '@prisma/client';
 import { Markup, TelegramError } from 'telegraf';
 import type { Telegram } from 'telegraf';
 import type { AppConfig } from '../../config.js';
-import { announcement, BillError } from './rules.js';
+import { BillError } from './rules.js';
+import { billMessage } from '../group-message.js';
 
 const staleAfterMs = 5 * 60_000;
 
@@ -29,13 +30,8 @@ export async function deliverBills(db: PrismaClient, telegram: Telegram, config:
     let messageId: number;
     try {
       if (item.bill) {
-        const message = await telegram.sendMessage(String(config.groupId), announcement(item.bill), {
-          parse_mode: 'HTML',
-          ...Markup.inlineKeyboard([[
-            Markup.button.url('View Bill', link(`bill_${item.bill.id}`)),
-            Markup.button.url('Debt Status', link('bill_ledger')),
-          ]]),
-        });
+        const { text, ...extra } = billMessage(item.bill, username);
+        const message = await telegram.sendMessage(String(config.groupId), text, extra);
         messageId = message.message_id;
       } else if (item.payment) {
         const bill = item.payment.share.bill;

@@ -84,20 +84,13 @@
     return anchor;
   }
 
-  function events() {
-    if (!snapshot) return [failure ? note('Upcoming events are unavailable.') : skeleton()];
+  function events(records, theme, path) {
+    if (!snapshot) return [failure ? note('Events are unavailable.') : skeleton()];
     if (snapshot.preview) return [note('Group events appear when the Board goes live.')];
-    const { plans, hangouts } = snapshot;
-    const rows = [
-      ...(plans ?? []).map((event) => ({ ...event, theme: 'plan-countdown', path: '/countdown' })),
-      ...(hangouts ?? []).map((event) => ({ ...event, theme: 'one-tap-hangout', path: '/hangout' })),
-    ].sort((a, b) => Date.parse(a.startsAt) - Date.parse(b.startsAt)).slice(0, 3);
-    const items = rows.map(({ id, title, startsAt, theme, path }) =>
+    if (!records) return [note('Events could not load.')];
+    return records.length ? records.map(({ id, title, startsAt }) =>
       link(title, theme, `${path}?view=detail&id=${encodeURIComponent(id)}`, 'home',
-        `${yangonDateTime.format(new Date(startsAt))} · Yangon`));
-    if (!plans || !hangouts) items.push(note('Some events could not load.'));
-    if (!items.length) items.push(note('No upcoming events.'));
-    return items;
+        `${yangonDateTime.format(new Date(startsAt))} · Yangon`)) : [note('No upcoming events.')];
   }
 
   function birthdays() {
@@ -116,8 +109,9 @@
       ...(polls ?? []).map((record) => ({ ...record, theme: 'poll' })),
       ...(budgets ?? []).map((record) => ({ ...record, theme: 'budget' })),
     ].sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt)).slice(0, limit);
-    const rows = records.map(({ title, createdAt, status, theme }) => {
-      const row = element('div', 'dashboard-row');
+    const rows = records.map(({ id, title, createdAt, status, theme }) => {
+      const row = element('a', 'dashboard-row');
+      row.href = featureUrl(`?feature=${theme}&view=votes&id=${encodeURIComponent(id)}`, activeTab ?? 'home');
       row.dataset.feature = theme;
       const copy = element('span', 'row-copy');
       copy.append(element('strong', '', title), element('small', '', yangonDateTime.format(new Date(createdAt))));
@@ -126,7 +120,7 @@
       return row;
     });
     if (!polls || !budgets) rows.push(note('Some activity could not load.'));
-    if (!rows.length) rows.push(note('Your saved polls and budget votes will appear here.'));
+    if (!rows.length) rows.push(note(snapshot.preview ? 'Your saved preview ballots will appear here.' : 'No recent published votes.'));
     return rows;
   }
 
@@ -137,26 +131,32 @@
     const birthdayLabel = birthday
       ? birthdayDate.format(new Date(Date.UTC(2000, birthday.month - 1, birthday.day)))
       : snapshot?.birthday ? 'Add your birthday' : undefined;
+    const debts = snapshot?.debts;
+    const debtLabel = debts ? `${debts.count}${debts.more ? '+' : ''} outstanding` : undefined;
     const billLabel = bills ? `${bills.count}${bills.more ? '+' : ''} ${bills.count === 1 ? 'bill' : 'bills'}` : undefined;
     get('home-updates').replaceChildren(
-      group('Upcoming events', events()),
+      group('Upcoming countdowns', events(snapshot?.plans, 'plan-countdown', '/countdown')),
+      group('Active hangouts', events(snapshot?.hangouts, 'one-tap-hangout', '/hangout')),
       group('Upcoming birthdays', birthdays()),
       group('Recent activity', recentActivity(3)),
       group('Quick actions', quickLinks('home')),
       group('My summary', [
         link('My birthday', 'birthday-reminder', '/birthday', 'home', birthdayLabel),
         link('My bills', 'bill-splitter', '/bills?view=mine', 'home', billLabel),
+        link('My debts', 'bill-splitter', '/bills?view=debts', 'home', debtLabel),
       ]),
     );
     get('activity-content').replaceChildren(group('Recent activity', [
       ...recentActivity(8),
+      ...(bills?.recent ?? []).map(({ id, title, total }) => link(title, 'bill-splitter',
+        `/bills?view=bill%3A${encodeURIComponent(id)}`, 'activity', `${BigInt(total).toLocaleString('en-US')} MMK`)),
     ]), group('Voting and results', [
       link('Smart Poll', 'poll', '?feature=poll&view=votes', 'activity'),
       link('Group Budget Vote', 'budget', '?feature=budget&view=votes', 'activity'),
     ]));
     get('my-stuff').replaceChildren(group('Personal summary', [
       link('My bills', 'bill-splitter', '/bills?view=mine', 'mine', billLabel),
-      link('My debts', 'bill-splitter', '/bills?view=debts', 'mine'),
+      link('My debts', 'bill-splitter', '/bills?view=debts', 'mine', debtLabel),
       link('My birthday', 'birthday-reminder', '/birthday', 'mine', birthdayLabel),
       link('My countdowns', 'plan-countdown', '/countdown?view=mine', 'mine'),
       link('My hangouts', 'one-tap-hangout', '/hangout?view=mine', 'mine'),
@@ -187,7 +187,7 @@
     }
     requestInFlight = true;
     retry.disabled = true;
-    if (!snapshot) notice('Loading Board updates…');
+    notice(snapshot ? 'Refreshing Board updates…' : 'Loading Board updates…');
     try {
       const response = await fetch(`${window.BOARD_API_ORIGIN ?? ''}/api/dashboard`, {
         method: 'POST', credentials: 'omit', redirect: 'error', cache: 'no-store',
@@ -195,14 +195,16 @@
         signal: AbortSignal.timeout(60_000),
       });
       const data = await response.json();
-      if (response.status === 403) snapshot = undefined;
       if (!response.ok) throw new Error(data.error);
       snapshot = data;
       failure = '';
-      notice(data.preview ? 'PRELAUNCH · Owner preview' : '');
+      const partial = !data.polls || !data.budgets || !data.birthday ||
+        (!data.preview && (!data.plans || !data.hangouts || !data.birthdays || !data.bills || !data.debts));
+      notice(partial ? 'Some Board updates could not load. Try again.' : data.preview ? 'PRELAUNCH · Owner preview' : '', partial);
     } catch (error) {
+      snapshot = undefined;
       failure = error instanceof Error && error.message.startsWith('Access could not be verified')
-        ? error.message : 'Could not refresh Board updates. Try again.';
+        ? error.message : 'Could not refresh Board updates. Try again or reopen The Board in Telegram.';
       notice(failure, true);
     } finally {
       refreshedAt = Date.now();
@@ -273,6 +275,7 @@
   home.hidden = nav.hidden = false;
   select(currentTab());
   renderData();
+  window.setInterval(() => void refresh(), 30_000);
   retry.addEventListener('click', () => void refresh(true));
   window.addEventListener('popstate', () => {
     if (sheet.open) sheet.close();

@@ -1,61 +1,15 @@
+import { loadVote, saveBallot } from '../vote-store.js';
 import type { PrismaClient } from '@prisma/client';
 import { Markup, Telegraf } from 'telegraf';
 import type { Context } from 'telegraf';
 import type { AppConfig } from '../../config.js';
-import type { createLogger } from '../../logger.js';
 import { navigationRow, showScreen } from '../../bot/navigation.js';
 import { registerBudgetMiniAppLaunch } from './native-form.js';
 
 type Authorize = (ctx: Context, allowGroupChat?: boolean) => Promise<boolean>;
 
-function errorName(error: unknown): string {
-  return error instanceof Error ? error.name : 'UnknownError';
-}
-
 function formatMmk(amount: bigint): string {
   return new Intl.NumberFormat('en-US').format(amount);
-}
-
-function budgetVoteKeyboard(
-  voteId: string,
-  ranges: { id: string; minMmk: bigint; maxMmk: bigint }[],
-  includeClose: boolean,
-) {
-  const rows = ranges.map((range) => [
-    Markup.button.callback(
-      `${formatMmk(range.minMmk)}-${formatMmk(range.maxMmk)} MMK`,
-    `bv:vote:${voteId}:${range.id}`,
-    ),
-  ]);
-  rows.push([
-    Markup.button.callback('Results', `bv:results:${voteId}`),
-  ]);
-  if (includeClose) {
-    rows.push([
-      Markup.button.callback('Close vote', `bv:close:${voteId}`),
-    ]);
-  }
-  return Markup.inlineKeyboard(rows);
-}
-
-function exactBudgetVoteKeyboard(
-  voteId: string,
-  options: { id: string; amountMmk: bigint }[],
-  includeClose: boolean,
-) {
-  const rows = options.map((option) => [
-    Markup.button.callback(
-      `${formatMmk(option.amountMmk)} MMK`,
-      `bv:amount:${voteId}:${option.id}`,
-    ),
-  ]);
-  rows.push([
-    Markup.button.callback('Results', `bv:amount-results:${voteId}`),
-  ]);
-  if (includeClose) {
-    rows.push([Markup.button.callback('Close vote', `bv:close:${voteId}`)]);
-  }
-  return Markup.inlineKeyboard(rows);
 }
 
 async function getExactVoteCounts(
@@ -71,27 +25,6 @@ async function getExactVoteCounts(
     GROUP BY "optionId"
   `;
   return new Map(grouped.map((item) => [item.optionId, Number(item.count)]));
-}
-
-function renderBudgetVote(
-  vote: {
-    title: string | null;
-    ranges: { id: string; position: number; minMmk: bigint; maxMmk: bigint }[];
-  },
-  counts: Map<string, number>,
-): string {
-  const total = [...counts.values()].reduce((sum, count) => sum + count, 0);
-  return [
-    vote.title ?? 'Group budget vote',
-    '',
-    ...vote.ranges.map(
-      (range) =>
-        `${formatMmk(range.minMmk)}-${formatMmk(range.maxMmk)} MMK: ${counts.get(range.id) ?? 0}`,
-    ),
-    '',
-    `Total votes: ${total}`,
-    'Choose a range to cast or update your vote.',
-  ].join('\n');
 }
 
 function renderExactBudgetVote(
@@ -129,7 +62,6 @@ export function registerBudgetVoteHandlers(
   bot: Telegraf,
   config: AppConfig,
   database: PrismaClient,
-  logger: ReturnType<typeof createLogger>,
   authorize: Authorize,
 ): void {
   registerBudgetMiniAppLaunch(bot, config, authorize);
@@ -138,86 +70,7 @@ export function registerBudgetVoteHandlers(
     (ctx.chat?.type === 'group' || ctx.chat?.type === 'supergroup') &&
     authorize(ctx, true);
 
-  bot.action(/^bv:vote:([a-z0-9]+):([a-z0-9]+)$/, async (ctx) => {
-    const allowed = await legacyGroupAccess(ctx);
-    if (!allowed || !ctx.from) {
-      await ctx.answerCbQuery('Current membership in the configured group is required.', {
-        show_alert: true,
-      });
-      return;
-    }
-    const voteId = ctx.match[1];
-    const rangeId = ctx.match[2];
-    if (!voteId || !rangeId) {
-      await ctx.answerCbQuery('This vote option is invalid.', { show_alert: true });
-      return;
-    }
-    const vote = await database
-      .$transaction(async (transaction) => {
-        const locked = await transaction.$queryRaw<{ id: string }[]>`
-          SELECT "id" FROM "BudgetVote"
-          WHERE "id" = ${voteId}
-            AND "status" = 'OPEN'
-          AND "groupId" = ${config.groupId} AND NOT "isPrelaunchTest" AND "telegramMessageId" IS NOT NULL
-          FOR UPDATE
-        `;
-        if (locked.length !== 1) {
-          throw new Error('This vote is closed.');
-        }
-        const currentVote = await transaction.budgetVote.findUnique({
-          where: { id: voteId },
-          include: { ranges: { orderBy: { position: 'asc' } } },
-        });
-        const selectedRange = currentVote?.ranges.find(
-          (range) => range.id === rangeId,
-        );
-        if (!currentVote || !selectedRange) {
-          throw new Error('This vote option is invalid.');
-        }
-        await transaction.budgetVoteBallot.upsert({
-          where: {
-            budgetVoteId_memberId: {
-              budgetVoteId: currentVote.id,
-              memberId: BigInt(ctx.from.id),
-            },
-          },
-          create: {
-            budgetVoteId: currentVote.id,
-            memberId: BigInt(ctx.from.id),
-            rangeId: selectedRange.id,
-          },
-          update: {
-            rangeId: selectedRange.id,
-          },
-        });
-        return currentVote;
-      })
-      .catch(async (error: unknown) => {
-        if (error instanceof Error && error.name === 'Error') {
-          await ctx.answerCbQuery(error.message, { show_alert: true });
-          return null;
-        }
-        throw error;
-      });
-    if (!vote) {
-      return;
-    }
-
-    const counts = await getVoteCounts(database, vote.id);
-    const output = renderBudgetVote(vote, counts);
-    if (vote.telegramMessageId !== null) {
-      await ctx.telegram.editMessageText(
-        config.groupId.toString(),
-        vote.telegramMessageId,
-        undefined,
-        output,
-        budgetVoteKeyboard(vote.id, vote.ranges, false),
-      );
-    }
-    await ctx.answerCbQuery('Vote saved. Results show aggregate counts only.');
-  });
-
-  bot.action(/^bv:amount:([a-z0-9]+):([a-zA-Z0-9_-]+)$/, async (ctx) => {
+  bot.action(/^bv:(?:vote|amount):([a-z0-9]+):([a-zA-Z0-9_-]+)$/, async (ctx) => {
     if (!(await legacyGroupAccess(ctx)) || !ctx.from) {
       await ctx.answerCbQuery('Current membership in the configured group is required.', {
         show_alert: true,
@@ -230,72 +83,12 @@ export function registerBudgetVoteHandlers(
       await ctx.answerCbQuery('This vote option is invalid.', { show_alert: true });
       return;
     }
-    const saved = await database.$transaction(async (transaction) => {
-      const locked = await transaction.$queryRaw<{ id: string }[]>`
-        SELECT "id" FROM "BudgetVote"
-        WHERE "id" = ${voteId}
-          AND "status" = 'OPEN'
-          AND "groupId" = ${config.groupId} AND NOT "isPrelaunchTest" AND "telegramMessageId" IS NOT NULL
-        FOR UPDATE
-      `;
-      if (locked.length !== 1) {
-        return null;
-      }
-      const votes = await transaction.$queryRaw<
-        { title: string | null; telegramMessageId: number | null }[]
-      >`
-        SELECT "title", "telegramMessageId"
-        FROM "BudgetVote"
-        WHERE "id" = ${voteId}
-      `;
-      const options = await transaction.$queryRaw<
-        { id: string; amountMmk: bigint }[]
-      >`
-        SELECT "id", "amountMmk"
-        FROM "BudgetVoteOption"
-        WHERE "budgetVoteId" = ${voteId}
-        ORDER BY "position" ASC
-      `;
-      const selected = options.find((option) => option.id === optionId);
-      const vote = votes[0];
-      if (!selected || !vote) {
-        return null;
-      }
-      await transaction.$executeRaw`
-        INSERT INTO "BudgetVoteOptionBallot"
-          ("budgetVoteId", "memberId", "optionId", "isPrelaunchTest", "updatedAt")
-        VALUES
-          (${voteId}, ${BigInt(ctx.from.id)}, ${optionId},
-           false, CURRENT_TIMESTAMP)
-        ON CONFLICT ("budgetVoteId", "memberId")
-        DO UPDATE SET
-          "optionId" = EXCLUDED."optionId",
-          "isPrelaunchTest" = EXCLUDED."isPrelaunchTest",
-          "updatedAt" = CURRENT_TIMESTAMP
-      `;
-      return {
-        title: vote.title,
-        telegramMessageId: vote.telegramMessageId,
-        options,
-      };
-    });
-    if (!saved) {
-      await ctx.answerCbQuery('This vote is closed or the option is invalid.', {
-        show_alert: true,
-      });
+    const record = await loadVote(database, config.groupId, 'bv', voteId);
+    const index = record?.choices.findIndex(({ id }) => id === optionId) ?? -1;
+    if (!record || index < 0 || record.telegramMessageId !== ctx.callbackQuery.message?.message_id ||
+        !await saveBallot(database, config, 'bv', record, BigInt(ctx.from.id), 1 << index)) {
+      await ctx.answerCbQuery('This vote is closed or the option is invalid.', { show_alert: true });
       return;
-    }
-
-    const counts = await getExactVoteCounts(database, voteId);
-    const output = renderExactBudgetVote(saved.title, saved.options, counts);
-    if (saved.telegramMessageId !== null) {
-      await ctx.telegram.editMessageText(
-        config.groupId.toString(),
-        saved.telegramMessageId,
-        undefined,
-        output,
-        exactBudgetVoteKeyboard(voteId, saved.options, false),
-      );
     }
     await ctx.answerCbQuery('Vote saved. Results show aggregate counts only.');
   });
@@ -407,30 +200,11 @@ export function registerBudgetVoteHandlers(
     }
     const closed = await database.budgetVote.updateMany({
       where: { id: vote.id, status: 'OPEN', isPrelaunchTest: false },
-      data: { status: 'CLOSED', closedAt: new Date() },
+      data: { status: 'CLOSED', closedAt: new Date(), groupSyncAt: new Date() },
     });
     if (!closed.count) {
       await ctx.answerCbQuery('This vote is already closed.');
       return;
-    }
-    if (vote.status === 'OPEN' && vote.telegramMessageId !== null) {
-      try {
-        await ctx.telegram.editMessageReplyMarkup(
-          config.groupId.toString(),
-          vote.telegramMessageId,
-          undefined,
-          { inline_keyboard: [] },
-        );
-      } catch (error) {
-        logger.warn(
-          {
-            errorName: errorName(error),
-            operation: 'remove-closed-budget-keyboard',
-            budgetVoteId: vote.id,
-          },
-          'Budget vote is closed in the database but its Telegram buttons remain visible',
-        );
-      }
     }
     await ctx.answerCbQuery('Vote closed.');
     await showScreen(ctx, 'Voting closed.', Markup.inlineKeyboard([navigationRow('bv:list')]));

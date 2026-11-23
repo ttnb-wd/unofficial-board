@@ -154,12 +154,17 @@ async function lockShare(tx: Prisma.TransactionClient, groupId: bigint, id: stri
   return tx.groupBillShare.findUniqueOrThrow({ where: { id } });
 }
 
+function refreshAnnouncement(tx: Prisma.TransactionClient, billId: string) {
+  return tx.billDelivery.updateMany({ where: { billId }, data: { groupSyncAt: new Date() } });
+}
+
 export function payLater(db: PrismaClient, groupId: bigint, actor: bigint, id: string) {
   return db.$transaction(async (tx) => {
     const share = await lockShare(tx, groupId, id, actor, 'debtor');
     if (share.status === 'PAY_LATER') return;
     if (share.status !== 'UNPAID') throw conflict();
     await tx.groupBillShare.update({ where: { id }, data: { status: 'PAY_LATER' } });
+    await refreshAnnouncement(tx, share.billId);
   });
 }
 
@@ -212,6 +217,7 @@ export async function submitPayment(db: PrismaClient, groupId: bigint, actor: bi
       select: { id: true },
     });
     await tx.groupBillShare.update({ where: { id }, data: { status: directCash ? 'PAID' : 'PENDING_VERIFICATION' } });
+    await refreshAnnouncement(tx, share.billId);
     return payment;
   }, { isolationLevel: 'ReadCommitted' });
 }
@@ -225,6 +231,7 @@ export function reviewPayment(db: PrismaClient, groupId: bigint, actor: bigint, 
     if (payment.decision !== 'PENDING' || share.status !== 'PENDING_VERIFICATION') throw conflict();
     await tx.billPayment.update({ where: { id: paymentId }, data: { decision, reviewedBy: actor, reviewedAt: new Date() } });
     await tx.groupBillShare.update({ where: { id: shareId }, data: { status: decision === 'CONFIRMED' ? 'PAID' : payment.previousStatus } });
+    await refreshAnnouncement(tx, share.billId);
   }, { isolationLevel: 'ReadCommitted' });
 }
 

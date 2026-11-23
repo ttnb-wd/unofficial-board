@@ -11,6 +11,7 @@ import { verifyAndRecordMembership } from '../access/membership.js';
 import { hasPrelaunchAccess } from '../access/policy.js';
 import type { createLogger } from '../logger.js';
 import { handleBillAction } from '../features/bill-splitter/api.js';
+import { refreshGroupMessages } from '../features/group-message.js';
 import { deliverBills } from '../features/bill-splitter/delivery.js';
 import { handleBirthdayAction } from '../features/birthday-reminder/api.js';
 import { deliverBirthdays } from '../features/birthday-reminder/delivery.js';
@@ -579,6 +580,7 @@ export function createMiniAppServer(
   const kick = () => {
     if (closing || pendingDelivery || !botUsername || config.accessMode !== 'LIVE') return;
     pendingDelivery = deliverBills(database, telegram, config, botUsername)
+      .then(() => refreshGroupMessages(database, telegram, config, botUsername))
       .catch((error: unknown) => logger.warn({ errorName: errorName(error) }, 'Bill delivery worker failed'))
       .finally(() => { pendingDelivery = undefined; });
   };
@@ -660,6 +662,7 @@ export function createMiniAppServer(
           return;
         }
         const result = await handleVoteAction(body, actor.userId, config, database, botUsername);
+        if (result.status === 200 && typeof body === 'object' && body && 'action' in body && body.action === 'submit') kick();
         sendJson(response, result.status, result.body);
         return;
       }

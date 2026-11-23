@@ -1,6 +1,7 @@
 import { Markup, TelegramError } from 'telegraf';
 import type { Context, Telegraf } from 'telegraf';
 import type { PrismaClient } from '@prisma/client';
+import { voteMessage } from '../features/group-message.js';
 import type { AppConfig } from '../config.js';
 import { navigationRow, showScreen } from './navigation.js';
 
@@ -55,7 +56,7 @@ export function registerVoting(
   config: AppConfig,
   database: PrismaClient,
   botUsername: string,
-  authorize: (ctx: Context) => Promise<boolean>,
+  authorize: (ctx: Context, allowGroup?: boolean) => Promise<boolean>,
 ) {
   const load = (kind: Kind, id: string) => loadVote(database, config.groupId, kind, id);
 
@@ -139,6 +140,7 @@ export function registerVoting(
     if (mode === 'owner') {
       const rows = [[button('Results', `${route}:r`)]];
       if (config.accessMode === 'PRELAUNCH' && BigInt(ctx.from!.id) === config.prelaunchOwnerId && record.ready) {
+        rows.push([button('Group Publishing Preview', `${route}:g`)]);
         rows.push([button('Member View Preview', detailRoute(kind, 'preview', record.id, page))]);
       }
       if (config.accessMode === 'LIVE' && !record.isPrelaunchTest && record.ready && record.status === 'DRAFT' && record.draftStep === 'SAVED') {
@@ -179,7 +181,7 @@ export function registerVoting(
     const [from, to] = states[action];
     const where = { id: record.id, groupId: config.groupId, creatorId: record.creatorId,
       status: from, isPrelaunchTest: false, ...(action === 'publish' ? { draftStep: 'SAVED' as const } : {}) };
-    const data = { status: to, ...(messageId === undefined ? {} : { telegramMessageId: messageId }), ...(action === 'close' ? { closedAt: new Date() } : {}) };
+    const data = { status: to, ...(action === 'close' ? { groupSyncAt: new Date() } : {}), ...(messageId === undefined ? {} : { telegramMessageId: messageId }), ...(action === 'close' ? { closedAt: new Date() } : {}) };
     return kind === 'poll' ? database.smartPoll.updateMany({ where, data })
       : database.budgetVote.updateMany({ where, data });
   }
@@ -188,9 +190,10 @@ export function registerVoting(
     if ((await transition(kind, record, 'publish')).count !== 1) return false;
     let sent;
     try {
-      sent = await ctx.telegram.sendMessage(config.groupId.toString(), `${label(kind)}\n\n${record.title}`,
-        Markup.inlineKeyboard([[Markup.button.url('Vote or view results',
-          `https://t.me/${botUsername}?start=vote_${kind}_${record.id}`)]]));
+      const { text, ...extra } = voteMessage(kind, record, botUsername);
+      type Signal = NonNullable<NonNullable<Parameters<typeof ctx.telegram.callApi>[2]>['signal']>;
+      sent = await ctx.telegram.callApi('sendMessage', { chat_id: config.groupId.toString(), text, ...extra },
+        { signal: AbortSignal.timeout(10_000) as unknown as Signal });
     } catch (error) {
       // A definite Telegram rejection permits a retry. A transport failure can have delivered the message.
       if (error instanceof TelegramError && error.code >= 400 && error.code < 500) {
@@ -200,6 +203,21 @@ export function registerVoting(
     }
     return (await transition(kind, record, 'open', sent.message_id)).count === 1;
   }
+
+  bot.action(/^gv:(poll|bv):([a-z0-9]{1,30}):([0-9])$/, async (ctx) => {
+    const message = ctx.callbackQuery.message;
+    if (config.accessMode !== 'LIVE' || !message || !ctx.from ||
+        !ctx.chat || ctx.chat.type === 'private' || BigInt(ctx.chat.id) !== config.groupId ||
+        !await authorize(ctx, true)) {
+      await ctx.answerCbQuery('Current group membership is required.', { show_alert: true });
+      return;
+    }
+    const kind = ctx.match[1] as Kind;
+    const record = await load(kind, ctx.match[2]!);
+    const saved = record && !record.multiple && record.telegramMessageId === message.message_id &&
+      await saveBallot(database, config, kind, record, BigInt(ctx.from.id), 1 << Number(ctx.match[3]));
+    await ctx.answerCbQuery(saved ? 'Vote saved.' : 'This ballot is unavailable.');
+  });
 
   bot.command('polls', (ctx) => showList(ctx, 'poll', 'mine', 0));
   bot.command('budgets', (ctx) => showList(ctx, 'bv', 'mine', 0));
@@ -223,7 +241,7 @@ export function registerVoting(
     await draw(ctx, kind, 'live', record, 0);
   });
 
-  bot.action(/^(?:(poll|bv):publish:([a-z0-9]{1,30})|vote:(poll|bv):(owner|live|preview|sample):([a-z0-9]{1,30}):(\d{1,6})(?::([orspc])(\d{0,4}))?)$/, async (ctx) => {
+  bot.action(/^(?:(poll|bv):publish:([a-z0-9]{1,30})|vote:(poll|bv):(owner|live|preview|sample):([a-z0-9]{1,30}):(\d{1,6})(?::([orspcg])(\d{0,4}))?)$/, async (ctx) => {
     if (!await allowed(ctx) || !ctx.from) return;
     const [, legacyKind, legacyId, currentKind, currentMode, currentId, currentPage, currentAction, selection] = ctx.match;
     const kind = (legacyKind ?? currentKind) as Kind;
@@ -235,6 +253,19 @@ export function registerVoting(
     let record = await load(kind, id);
     if (!record || !canView(ctx, mode, record)) {
       await ctx.answerCbQuery('This vote is unavailable or the button has expired.', { show_alert: true });
+      return;
+    }
+
+    if (action === 'g') {
+      const allowed = mode === 'owner' && config.accessMode === 'PRELAUNCH' &&
+        BigInt(ctx.from.id) === config.prelaunchOwnerId && record.ready;
+      await ctx.answerCbQuery(allowed ? undefined : 'Preview unavailable.');
+      if (allowed) {
+        const sample = { ...record, status: 'OPEN' as const, total: 0,
+          choices: record.choices.map((choice) => ({ ...choice, count: 0 })) };
+        await showScreen(ctx, `Group Publishing Preview · Simulation\n\n${voteMessage(kind, sample, botUsername).text}`,
+          Markup.inlineKeyboard([navigationRow(detailRoute(kind, 'owner', id, page))]));
+      }
       return;
     }
 

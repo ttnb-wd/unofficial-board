@@ -163,14 +163,14 @@
     return form;
   }
 
-  function showBallot(data, submitted = false) {
+  function showBallot(data, submitted = false, showResults = false) {
     title.textContent = data.title;
     showPreview(data.preview);
     const eligible = data.open && (data.preview || data.custom);
     intro.textContent = data.preview ? 'Try the ballot in simulation.'
       : eligible ? 'You can update your vote while voting is open.'
         : data.open ? 'Vote using the original message in Telegram.' : 'Voting is closed.';
-    const results = resultCard(data, eligible && !submitted);
+    const results = resultCard(data, eligible && !submitted && !showResults);
     const action = button('View results', () => {
       results.hidden = false;
       action.hidden = true;
@@ -186,6 +186,7 @@
     if (eligible) items.push(ballot(data));
     if (results.hidden) items.push(action);
     items.push(results);
+    if (!data.preview) items.push(button('Refresh ballot and results', () => void load(true), 'secondary-button'));
     if (data.botUrl) {
       const bot = element('a', 'secondary-button', 'Open in Telegram');
       bot.href = data.botUrl;
@@ -196,14 +197,14 @@
     if (submitted) results.querySelector('h2').focus();
   }
 
-  async function load() {
+  async function load(showResults = false) {
     if (busy) return;
     notice();
     const loading = element('p', 'dashboard-card loading-status', 'Loading ballots…');
     loading.setAttribute('role', 'status');
     root.replaceChildren(loading);
     try {
-      if (id) showBallot(await request({ action: 'detail', id }));
+      if (id) showBallot(await request({ action: 'detail', id }), false, showResults);
       else showList(await request({ action: 'list', page }));
     } catch (error) {
       notice(error.message);

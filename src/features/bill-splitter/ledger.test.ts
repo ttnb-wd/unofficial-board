@@ -9,6 +9,7 @@ import type { AppConfig } from '../../config.js';
 import { createLogger } from '../../logger.js';
 import { createMiniAppServer } from '../../mini-app/server.js';
 import { handleBillAction } from './api.js';
+import { refreshGroupMessages } from '../group-message.js';
 import { deliverBills, retryAnnouncement } from './delivery.js';
 import { createBill, getBill, getProof, ledger, normalizeProof, payLater, reviewPayment, roster, submitPayment } from './ledger.js';
 import { announcement, calculateShares, createBillInput } from './rules.js';
@@ -110,7 +111,8 @@ describe.skipIf(!dbUrl)('isolated PostgreSQL bill flow', () => {
     const getChatMember = vi.fn(async (_group: string, id: number) => ({
       status: id === 99 ? 'left' : 'member', user: { id, first_name: `Fixture ${id}`, is_bot: false },
     }));
-    const telegram = { getChatMember, sendMessage } as unknown as Telegram;
+    const callApi = vi.fn().mockResolvedValue(true);
+    const telegram = { getChatMember, sendMessage, callApi } as unknown as Telegram;
     const api = createMiniAppServer(live, db, telegram, createLogger('silent'));
     try {
       await db.telegramGroup.create({ data: { telegramId: groupId } });
@@ -190,6 +192,17 @@ describe.skipIf(!dbUrl)('isolated PostgreSQL bill flow', () => {
       await deliverBills(db, telegram, live, 'fixture_bot');
       expect(sendMessage).toHaveBeenCalledOnce();
       expect(await db.billDelivery.findUnique({ where: { billId: one.id } })).toMatchObject({ status: 'SENT', telegramMessageId: 800 });
+
+      await refreshGroupMessages(db, telegram, { ...live, accessMode: 'PRELAUNCH' }, 'fixture_bot');
+      expect(callApi).not.toHaveBeenCalled();
+      await Promise.all(Array.from({ length: 2 }, () => refreshGroupMessages(db, telegram, live, 'fixture_bot')));
+      expect(callApi).toHaveBeenCalledExactlyOnceWith('editMessageText', expect.objectContaining({
+        chat_id: String(groupId), message_id: 800, text: expect.stringContaining('Paid'),
+      }), expect.anything());
+      const edit = JSON.stringify(callApi.mock.calls[0]?.[1]);
+      expect(edit).not.toContain(payment.id);
+      expect(edit).not.toContain(payload.image);
+      expect(sendMessage).toHaveBeenCalledOnce();
 
       const ambiguous = await createBill(db, telegram, groupId, 42n, billInput());
       await db.billDelivery.update({ where: { billId: ambiguous.id }, data: { status: 'SENDING', attemptAt: new Date(0) } });

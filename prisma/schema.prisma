@@ -156,6 +156,7 @@ model SmartPoll {
   status                SmartPollStatus    @default(DRAFT)
   telegramPollId        String?            @unique
   telegramMessageId     Int?
+  groupSyncAt           DateTime?
   promptMessageId       Int?
   totalVoterCount       Int                @default(0)
   isPrelaunchTest       Boolean            @default(false)
@@ -205,6 +206,7 @@ model BudgetVote {
   status            BudgetVoteStatus         @default(DRAFT)
   draftStep         BudgetDraftStep          @default(TITLE)
   telegramMessageId Int?
+  groupSyncAt       DateTime?
   promptMessageId   Int?
   isPrelaunchTest   Boolean                  @default(false)
   createdAt         DateTime                 @default(now())
@@ -409,6 +411,7 @@ model BillPaymentProof {
 }
 
 model BillDelivery {
+  groupSyncAt DateTime?
   id                String             @id @default(cuid())
   billId            String?            @unique
   paymentId         String?            @unique

@@ -642,7 +642,7 @@ describe('creator and member voting', () => {
     expect(sends[0]?.[1]).toEqual(expect.objectContaining({
       chat_id: config.groupId.toString(),
       reply_markup: expect.objectContaining({
-        inline_keyboard: [[expect.objectContaining({ url: `https://t.me/test_bot?start=vote_${kind}_${saved.id}` })]],
+        inline_keyboard: expect.arrayContaining([[expect.objectContaining({ url: `https://t.me/test_bot?start=vote_${kind}_${saved.id}` })]]),
       }),
     }));
     await bot.handleUpdate(messageUpdate(84, { id: 84, type: 'private', first_name: 'Member' }, `/start vote_${kind}_${saved.id}`));

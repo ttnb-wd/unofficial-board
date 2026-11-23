@@ -12,10 +12,10 @@ function mmk(amount: bigint) {
 }
 
 export function loadVote(database: PrismaClient, groupId: bigint, kind: Kind, id: string) {
-  return database.$transaction((tx) => readRecord(tx, groupId, kind, id), { isolationLevel: 'RepeatableRead' });
+  return database.$transaction((tx) => readVoteRecord(tx, groupId, kind, id), { isolationLevel: 'RepeatableRead' });
 }
 
-export type VoteRecord = NonNullable<Awaited<ReturnType<typeof readRecord>>>;
+export type VoteRecord = NonNullable<Awaited<ReturnType<typeof readVoteRecord>>>;
 
 export function publishedVotes(groupId: bigint) {
   return { groupId, isPrelaunchTest: false, telegramMessageId: { not: null },
@@ -28,6 +28,13 @@ export function canViewPublished(config: AppConfig, record: VoteRecord) {
 }
 
 export async function memberSelection(database: PrismaClient, kind: Kind, record: VoteRecord, memberId: bigint) {
+  if (kind === 'bv' && 'ranges' in record && !record.options.length) {
+    const ballot = await database.budgetVoteBallot.findUnique({
+      where: { budgetVoteId_memberId: { budgetVoteId: record.id, memberId } }, select: { rangeId: true },
+    });
+    const index = record.choices.findIndex(({ id }) => id === ballot?.rangeId);
+    return index < 0 ? 0 : 1 << index;
+  }
   const selected = kind === 'poll'
     ? await database.smartPollVote.findMany({ where: { pollId: record.id, memberId }, select: { optionId: true } })
     : await database.budgetVoteOptionBallot.findMany({
@@ -42,7 +49,7 @@ export function validSelection(record: VoteRecord, mask: number, required: boole
     (record.multiple || (mask & (mask - 1)) === 0);
 }
 
-async function readRecord(tx: Prisma.TransactionClient, groupId: bigint, kind: Kind, id: string) {
+export async function readVoteRecord(tx: Prisma.TransactionClient, groupId: bigint, kind: Kind, id: string) {
   const where = { id, groupId };
   if (kind === 'poll') {
     const poll = await tx.smartPoll.findUnique({
@@ -74,7 +81,7 @@ async function readRecord(tx: Prisma.TransactionClient, groupId: bigint, kind: K
     ...vote,
     title: vote.title ?? 'Untitled budget vote',
     ready: Boolean(vote.title) && vote.options.length >= 2,
-    custom: vote.options.length >= 2,
+    custom: choices.length >= 2,
     multiple: false,
     choices,
     total: choices.reduce((sum, choice) => sum + choice.count, 0),
@@ -102,7 +109,14 @@ export async function saveBallot(database: PrismaClient, config: AppConfig, kind
       });
       const voters = await tx.$queryRaw<{ total: number }[]>`
         SELECT COUNT(DISTINCT "memberId")::int AS total FROM "SmartPollVote" WHERE "pollId" = ${record.id}`;
-      await tx.smartPoll.update({ where: { id: record.id }, data: { totalVoterCount: voters[0]!.total } });
+      await tx.smartPoll.update({ where: { id: record.id }, data: { totalVoterCount: voters[0]!.total, groupSyncAt: new Date() } });
+    } else if ('ranges' in record && !record.options.length) {
+      const rangeId = selected[0]!.id;
+      await tx.budgetVoteBallot.upsert({
+        where: { budgetVoteId_memberId: { budgetVoteId: record.id, memberId: user } },
+        create: { budgetVoteId: record.id, memberId: user, rangeId },
+        update: { rangeId },
+      });
     } else {
       const optionId = selected[0]!.id;
       await tx.budgetVoteOptionBallot.upsert({
@@ -111,6 +125,7 @@ export async function saveBallot(database: PrismaClient, config: AppConfig, kind
         update: { optionId },
       });
     }
+    if (kind === 'bv') await tx.budgetVote.update({ where: { id: record.id }, data: { groupSyncAt: new Date() } });
     return true;
   }, { isolationLevel: 'ReadCommitted' });
 }

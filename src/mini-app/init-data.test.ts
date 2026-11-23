@@ -5,10 +5,10 @@ import { validateTelegramInitData } from './init-data.js';
 const BOT_TOKEN = '123456:test-token';
 const NOW = 1_800_000_000;
 
-function signedInitData(userId: number, authDate = NOW): string {
+function signedInitData(userId: number, authDate = NOW, launch: Record<string, string> = { query_id: 'test-query' }): string {
   const params = new URLSearchParams({
     auth_date: String(authDate),
-    query_id: 'test-query',
+    ...launch,
     user: JSON.stringify({ id: userId, first_name: 'Owner' }),
   });
   const checkString = [...params.entries()]
@@ -31,6 +31,10 @@ describe('Telegram Mini App initData validation', () => {
       id: 42n,
       first_name: 'Owner',
     });
+  });
+
+  it('accepts signed Main Mini App identity without a query ID', () => {
+    expect(validateTelegramInitData(signedInitData(42, NOW, {}), BOT_TOKEN, NOW)?.id).toBe(42n);
   });
 
   it('rejects altered, stale, duplicated, and malformed initData', () => {

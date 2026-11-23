@@ -51,6 +51,7 @@ export async function handleBillAction(body: unknown, actor: bigint, config: App
     case 'bill': return getBill(db, groupId, actor, input.id);
     case 'later':
       await payLater(db, groupId, actor, input.share);
+      kick();
       return { ok: true };
     case 'submit':
       if (Boolean(input.image) !== (input.method === 'TRANSFER')) {
@@ -64,9 +65,13 @@ export async function handleBillAction(body: unknown, actor: bigint, config: App
     case 'proof': return getProof(db, groupId, actor, input.payment);
     case 'review':
       await reviewPayment(db, groupId, actor, input.share, input.payment, input.decision);
+      kick();
       return { ok: true };
-    case 'cash':
-      return submitPayment(db, groupId, actor, input.share, { requestId: input.requestId, method: 'CASH' }, true);
+    case 'cash': {
+      const result = await submitPayment(db, groupId, actor, input.share, { requestId: input.requestId, method: 'CASH' }, true);
+      kick();
+      return result;
+    }
     case 'retry':
       await retryAnnouncement(db, groupId, actor, input.id);
       kick();

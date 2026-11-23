@@ -121,15 +121,22 @@ Telegram polling cannot wake it. If the bot sleeps and does not answer
 it responds. The Vercel form waits for API health before sending a save.
 An interrupted save can be retried with the same submission ID while the
 form remains open. If the Telegram session has expired, check saved items
-before reopening to retry. [Render Free](https://render.com/docs/free)
+before reopening to retry. Birthday and countdown workers do not run during
+sleep. On wake, they resume from PostgreSQL. A countdown reminder or birthday
+wish can arrive late or expire outside its delivery window. Bill announcements,
+hangout invitations and group message edits also wait for the process to wake.
+[Render Free](https://render.com/docs/free)
 
 Telegram inline Mini App buttons launch from a private bot chat. The shared
 Mini App dashboard opens at `/mini-app`. To activate the optional chat menu
 button after deployment, use BotFather’s `/setmenubutton`, set the label to
 **The Board**, and enter `https://<MINI_APP_URL host>/mini-app`.
 `buildBoardMenuButton` prepares the same payload for the Bot API. The bot
-leaves the menu button setting to the operator. Signed Telegram launch data
-expires after five minutes.
+leaves the menu button setting to the operator. Set the Main Mini App in
+BotFather to `https://unofficial-board-lyart.vercel.app/mini-app`. Both buttons
+open Home. Feature links keep their own destinations. The API verifies signed
+identity, including launches without a query ID. Signed launch data expires
+after five minutes. Reopen The Board in Telegram when it expires.
 [Telegram Mini Apps](https://core.telegram.org/bots/webapps)
 
 In an authorized private chat, `/start` and `/menu` send the inline shortcuts
@@ -191,22 +198,43 @@ group-membership record.
   submit with **Done**. Open **My polls** or **My budget votes** and select
   the item to see its status, choices, and **Results**. In LIVE, a saved
   LIVE draft can be published explicitly and its creator can close voting.
+- **Group Publishing Preview** shows the announcement privately in PRELAUNCH.
 - **Member View Preview** — In PRELAUNCH, the owner can choose a saved item
   from **Member View Preview** or open the preview from its detail. Select
   an option and tap **Submit vote** to see simulated results. The preview
   starts from zero and uses no saved ballots, group messages, or extra records.
-- **LIVE member** — Open the announcement's **Vote or view results** link in
-  Telegram, or open **Published votes** in the feature menu. Current group
+- **LIVE member** — Vote in the group for a single-answer poll or budget vote.
+  For a multi-answer poll, open **Choose answers privately**. **View ballot**
+  and **Published votes** open the private ballot and results. Current group
   members can select and submit an answer or exact MMK amount. A new submission
   replaces the member's previous selection. Closed votes remain available for
   results. Multi-answer polls calculate each option's percentage against the
   number of unique voters, so percentages can exceed 100% when added together.
 
-New publications use the bot's private ballot screens and aggregate results.
+The Board refreshes Home while visible and can refresh an open ballot on
+request. Failed Home refreshes clear the old snapshot and offer a retry.
 Older Telegram-native polls still use the original group message for voting.
 Historical anonymous native option counts are available on the original poll.
-Legacy budget ranges are preserved for historical records. PRELAUNCH data
-cannot be published after switching to LIVE.
+Existing budget range ballots keep their saved selections across interfaces.
+PRELAUNCH data cannot be published after switching to LIVE.
+
+Group ballot results and bill share statuses are edited in place using the
+stored message IDs. PostgreSQL records pending edits in the same transaction
+as the underlying changes. The running backend checks for pending edits
+every 15 seconds. Transient edit failures are retried against the same
+message. A deleted or inaccessible message is never replaced automatically.
+Payment verification alerts go only to the receiver's private bot chat.
+Group bill messages contain share amounts and statuses only. Payment
+screenshots are available through actor-checked endpoints to the debtor and
+receiver.
+
+An uncertain poll or budget publication stays in `PUBLISHING` for operator
+reconciliation. A definite Telegram rejection permits the creator to retry.
+The other durable delivery flows hold uncertain sends for reconciliation as
+`UNKNOWN`. Telegram delivery cannot be guaranteed exactly once. Before
+deploying this revision, apply the additive group message refresh migration
+and regenerate Prisma Client. Test the live launch contexts and group permissions
+in an isolated Telegram test group before enabling LIVE for the actual group.
 
 If an announcement's delivery is uncertain, the record stays in **Publication
 pending** to avoid retrying a send that Telegram may already have accepted.

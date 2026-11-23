@@ -24,7 +24,7 @@ function mockDatabase(record = budget) {
     findMany: vi.fn().mockResolvedValue([{ optionId: 'one' }]),
   };
   const tx = {
-    budgetVote: { findUnique: vi.fn().mockResolvedValue(record) },
+    budgetVote: { findUnique: vi.fn().mockResolvedValue(record), update: vi.fn() },
     budgetVoteOptionBallot: ballots,
     $queryRaw: vi.fn().mockResolvedValue([{ id }]),
   };

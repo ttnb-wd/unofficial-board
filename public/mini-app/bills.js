@@ -472,10 +472,8 @@ async function detail(id) {
       await request('retry', { id });
       await detail(id);
     })));
-    if (['QUEUED', 'SENDING', 'UNKNOWN'].includes(bill.delivery)) {
-      header.append(button('Refresh delivery status', () => run(() => detail(id))));
-    }
   }
+  if (!session.preview) header.append(button('Refresh bill', () => run(() => detail(id))));
   const rows = card();
   rows.append(el('h2', 'Shares'));
   const sampleDebtor = bill.shares.find((share) => share.debtorId === session.actor && share.debtorId !== bill.receiverId && share.amount !== '0')

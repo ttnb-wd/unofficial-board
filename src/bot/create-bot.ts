@@ -159,7 +159,7 @@ export function createBot(
   }
 
   registerSmartPollHandlers(bot, config, database, logger, authorize);
-  registerBudgetVoteHandlers(bot, config, database, logger, authorize);
+  registerBudgetVoteHandlers(bot, config, database, authorize);
 
   bot.action(/^draft:cancel:(poll|budget):[a-z0-9]+$/, async (ctx) => {
     if (!await authorize(ctx)) {
