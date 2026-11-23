@@ -70,6 +70,8 @@
     fields.disabled = save.disabled = remove.disabled = true;
     retry.hidden = true;
     message('error');
+    const status = get('status');
+    status.classList.add('loading-status');
     message('status', loading);
     try {
       await work();
@@ -78,6 +80,7 @@
       message('error', error instanceof Error ? error.message : 'Try again.');
       retry.hidden = !canRetry;
     } finally {
+      status.classList.remove('loading-status');
       fields.disabled = save.disabled = remove.disabled = false;
       busy = false;
     }
@@ -143,8 +146,9 @@
   });
 
   retry.addEventListener('click', load);
-  get('back').addEventListener('click', () => telegram?.close());
-  telegram?.BackButton?.onClick(() => telegram.close());
+  const back = () => { if (!window.BoardUI.backToBoard()) telegram?.close(); };
+  get('back').addEventListener('click', back);
+  telegram?.BackButton?.onClick(back);
   telegram?.BackButton?.show();
   telegram?.ready();
   telegram?.expand();

@@ -123,9 +123,13 @@ An interrupted save can be retried with the same submission ID while the
 form remains open. If the Telegram session has expired, check saved items
 before reopening to retry. [Render Free](https://render.com/docs/free)
 
-Telegram inline Mini App buttons launch from a private bot chat. This
-flow needs no separate BotFather menu button or named Mini App. Signed
-Telegram launch data expires after five minutes.
+Telegram inline Mini App buttons launch from a private bot chat. The shared
+Mini App dashboard opens at `/mini-app`. To activate the optional chat menu
+button after deployment, use BotFather’s `/setmenubutton`, set the label to
+**The Board**, and enter `https://<MINI_APP_URL host>/mini-app`.
+`buildBoardMenuButton` prepares the same payload for the Bot API. The bot
+leaves the menu button setting to the operator. Signed Telegram launch data
+expires after five minutes.
 [Telegram Mini Apps](https://core.telegram.org/bots/webapps)
 
 ## Access lifecycle
@@ -144,13 +148,19 @@ Never enable LIVE automatically.
 ## Embedded private-chat forms
 
 The Create buttons are Telegram Mini App buttons and open the forms inside
-Telegram. Smart Poll starts with a question and three answer inputs. Budget
+Telegram. Smart Poll starts with a question and two answer inputs. Budget
 Vote starts with a title and three exact MMK amount inputs. Both forms support
-adding/removing choices and save only when **Done** is tapped. After the
-server confirms the save, the form shows success and closes back to Telegram. The forms need
+adding/removing choices. After a successful save, forms launched from a
+bot button close back to Telegram. Forms launched from The Board show the
+confirmation and let users return to their previous dashboard tab. The forms need
 `MINI_APP_URL` to be a public HTTPS origin; the feature menu displays setup guidance until that origin is configured.
 
 `/poll` and `/budget` also provide an embedded-form launch button.
+
+Use **Activity → Voting and results** in The Board to open group ballots.
+Custom poll and budget ballots use the same saved selections and results as
+the Telegram bot. Older Telegram-native ballots offer a handoff to the bot.
+In PRELAUNCH, the owner can simulate a ballot using saved preview records.
 `/polls` and `/budgets` list saved items. Existing draft records are preserved;
 opening either embedded form does not cancel or alter drafts.
 

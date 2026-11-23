@@ -29,7 +29,7 @@ export async function handleHangoutAction(
   if (!parsed.success) return reject(400, 'Check the hangout details and use Yangon time.');
   const action = parsed.data;
   const preview = config.accessMode === 'PRELAUNCH';
-  const ok = (body: object) => ({ status: 200, body: { ...body, serverNow: clock().toISOString() } });
+  const ok = <T extends object>(body: T) => ({ status: 200, body: { ...body, serverNow: clock().toISOString() } });
   if (preview && actor.id !== config.prelaunchOwnerId) return reject(403, 'Owner access is required.');
   if (action.action === 'session') return ok({ preview });
   if (preview) return reject(403, 'Use the isolated hangout simulation.');

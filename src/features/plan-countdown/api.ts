@@ -55,7 +55,7 @@ export async function handleCountdownAction(input: unknown, userId: bigint, conf
   if (!parsed.success) return error(400, 'Check the plan details. Use Yangon time and a title up to 80 characters.');
   const action = parsed.data;
   const preview = config.accessMode === 'PRELAUNCH';
-  const ok = (body: object) => ({ status: 200, body: { serverNow: clock().toISOString(), ...body } });
+  const ok = <T extends object>(body: T) => ({ status: 200, body: { serverNow: clock().toISOString(), ...body } });
   if (preview && userId !== config.prelaunchOwnerId) return error(403, 'Owner access is required.');
   if (action.action === 'session') {
     const example = { title: 'Weekend picnic', startsAt: new Date(now.getTime() + 48 * 3_600_000) };

@@ -20,7 +20,9 @@ import { deliverCountdowns } from '../features/plan-countdown/delivery.js';
 import { handleHangoutAction } from '../features/one-tap-hangout/api.js';
 import { deliverHangouts } from '../features/one-tap-hangout/delivery.js';
 import { displayName } from '../features/one-tap-hangout/rules.js';
+import { readDashboard } from './dashboard.js';
 import { validateTelegramInitData } from './init-data.js';
+import { handleVoteAction } from './votes.js';
 import {
   budgetVoteSubmissionSchema,
   smartPollSubmissionSchema,
@@ -490,30 +492,36 @@ async function saveBudgetVote(
   }
 }
 
-async function serveAsset(
-  response: ServerResponse,
-  fileName: 'index.html' | 'app.css' | 'app.js' | 'config.js' | 'bills.html' | 'bills.js' | 'birthday.html' | 'birthday.js' | 'countdown.html' | 'countdown.js' | 'countdown-clock.js' | 'event-time.js' | 'hangout.html' | 'hangout.js' | 'hangout-launch.js',
-): Promise<void> {
-  const contentTypes = {
-    'index.html': 'text/html; charset=utf-8',
-    'bills.html': 'text/html; charset=utf-8',
-    'bills.js': 'text/javascript; charset=utf-8',
-    'birthday.html': 'text/html; charset=utf-8',
-    'hangout.html': 'text/html; charset=utf-8',
-    'hangout.js': 'text/javascript; charset=utf-8',
-    'hangout-launch.js': 'text/javascript; charset=utf-8',
-    'countdown.html': 'text/html; charset=utf-8',
-    'countdown.js': 'text/javascript; charset=utf-8',
-    'countdown-clock.js': 'text/javascript; charset=utf-8',
-    'event-time.js': 'text/javascript; charset=utf-8',
-    'birthday.js': 'text/javascript; charset=utf-8',
-    'app.css': 'text/css; charset=utf-8',
-    'app.js': 'text/javascript; charset=utf-8',
-    'config.js': 'text/javascript; charset=utf-8',
-  };
-  const content = await readFile(resolve(ASSET_DIRECTORY, fileName));
-  setHeaders(response, contentTypes[fileName]);
+const pageAssets = new Map([
+  ['/mini-app', 'index.html'],
+  ['/mini-app/bills', 'bills.html'],
+  ['/mini-app/birthday', 'birthday.html'],
+  ['/mini-app/countdown', 'countdown.html'],
+  ['/mini-app/hangout', 'hangout.html'],
+]);
+const scriptAssets = new Set([
+  'app.js', 'config.js', 'board.js', 'home.js', 'votes.js', 'bills.js', 'birthday.js',
+  'countdown.js', 'countdown-clock.js', 'event-time.js', 'hangout.js', 'hangout-launch.js',
+]);
+const otherAssets = new Map([
+  ['app.css', 'text/css; charset=utf-8'],
+  ['icons.svg', 'image/svg+xml'],
+  ['welcome.webp', 'image/webp'],
+  ['poll.webp', 'image/webp'],
+  ['budget.webp', 'image/webp'],
+  ['bill.webp', 'image/webp'],
+]);
+
+async function serveAsset(response: ServerResponse, path: string) {
+  const page = pageAssets.get(path);
+  const name = path.startsWith('/mini-app/') ? path.slice('/mini-app/'.length) : '';
+  const type = page ? 'text/html; charset=utf-8' :
+    scriptAssets.has(name) ? 'text/javascript; charset=utf-8' : otherAssets.get(name);
+  if (!type) return false;
+  const content = await readFile(resolve(ASSET_DIRECTORY, page ?? name));
+  setHeaders(response, type);
   response.end(content);
+  return true;
 }
 
 function allowApiOrigin(
@@ -588,12 +596,15 @@ export function createMiniAppServer(
       const isBirthday = url.pathname === '/api/birthdays';
       const isCountdown = url.pathname === '/api/countdowns';
       const isHangout = url.pathname === '/api/hangouts';
+      const isDashboard = url.pathname === '/api/dashboard';
+      const isVotes = url.pathname === '/api/votes';
       const isHealth = url.pathname === '/healthz';
-      if ((feature || isBill || isBirthday || isCountdown || isHangout || isHealth) && !allowApiOrigin(request, response, frontendOrigin)) {
+      const isApi = feature || isBill || isBirthday || isCountdown || isHangout || isDashboard || isVotes;
+      if ((isApi || isHealth) && !allowApiOrigin(request, response, frontendOrigin)) {
         sendJson(response, 403, { error: 'Origin is not allowed.' });
         return;
       }
-      if (request.method === 'OPTIONS' && (feature || isBill || isBirthday || isCountdown || isHangout)) {
+      if (request.method === 'OPTIONS' && isApi) {
         if (request.headers['access-control-request-method'] !== 'POST') {
           sendJson(response, 405, { error: 'Method is not allowed.' });
           return;
@@ -613,54 +624,43 @@ export function createMiniAppServer(
         sendJson(response, 200, { status: 'ok' });
         return;
       }
-      if (request.method === 'GET' && config.serveMiniApp !== false) {
-        switch (url.pathname) {
-          case '/mini-app':
-            await serveAsset(response, 'index.html');
-            return;
-          case '/mini-app/bills':
-            await serveAsset(response, 'bills.html');
-            return;
-          case '/mini-app/bills.js':
-            await serveAsset(response, 'bills.js');
-            return;
-          case '/mini-app/hangout':
-            await serveAsset(response, 'hangout.html');
-            return;
-          case '/mini-app/hangout.js':
-            await serveAsset(response, 'hangout.js');
-            return;
-          case '/mini-app/hangout-launch.js':
-            await serveAsset(response, 'hangout-launch.js');
-            return;
-          case '/mini-app/countdown':
-            await serveAsset(response, 'countdown.html');
-            return;
-          case '/mini-app/countdown.js':
-            await serveAsset(response, 'countdown.js');
-            return;
-          case '/mini-app/countdown-clock.js':
-            await serveAsset(response, 'countdown-clock.js');
-            return;
-          case '/mini-app/event-time.js':
-            await serveAsset(response, 'event-time.js');
-            return;
-          case '/mini-app/birthday':
-            await serveAsset(response, 'birthday.html');
-            return;
-          case '/mini-app/birthday.js':
-            await serveAsset(response, 'birthday.js');
-            return;
-          case '/mini-app/app.css':
-            await serveAsset(response, 'app.css');
-            return;
-          case '/mini-app/app.js':
-            await serveAsset(response, 'app.js');
-            return;
-          case '/mini-app/config.js':
-            await serveAsset(response, 'config.js');
-            return;
+      if (request.method === 'GET' && config.serveMiniApp !== false && await serveAsset(response, url.pathname)) {
+        return;
+      }
+      if (request.method === 'POST' && isDashboard) {
+        const actor = await authorizeRequest(request, config, database, telegram);
+        if (!actor) {
+          sendJson(response, 403, { error: 'Access could not be verified. Open The Board from the private bot chat.' });
+          return;
         }
+        const dashboard = await readDashboard(actor, config, database, telegram, (error) => {
+          logger.warn({ errorName: errorName(error) }, 'Dashboard section could not load');
+        });
+        const dashboardUrl = botUsername && /^[a-zA-Z0-9_]+$/.test(botUsername)
+          ? `https://t.me/${botUsername}?start=dashboard` : undefined;
+        sendJson(response, 200, { ...dashboard, dashboardUrl });
+        return;
+      }
+      if (request.method === 'POST' && isVotes) {
+        const actor = await authorizeRequest(request, config, database, telegram);
+        if (!actor) {
+          sendJson(response, 403, { error: 'Access could not be verified. Reopen The Board in Telegram.' });
+          return;
+        }
+        if (request.headers['content-type']?.split(';')[0] !== 'application/json') {
+          sendJson(response, 415, { error: 'JSON is required.' });
+          return;
+        }
+        let body: unknown;
+        try {
+          body = await readJsonBody(request);
+        } catch (error) {
+          sendJson(response, error instanceof RangeError ? 413 : 400, { error: 'The request could not be read.' });
+          return;
+        }
+        const result = await handleVoteAction(body, actor.userId, config, database, botUsername);
+        sendJson(response, result.status, result.body);
+        return;
       }
       if (request.method === 'POST' && isHangout) {
         const receivedAt = new Date();

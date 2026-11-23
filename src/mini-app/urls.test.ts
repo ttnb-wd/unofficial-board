@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { AppConfig } from '../config.js';
-import { buildMiniAppUrl } from './urls.js';
+import { buildBoardMenuButton, buildMiniAppUrl } from './urls.js';
 
 const config: AppConfig = {
   botToken: 'test-token',
@@ -32,4 +32,13 @@ describe('buildMiniAppUrl', () => {
       buildMiniAppUrl({ ...config, miniAppUrl: 'http://localhost:3000' }, 'poll'),
     ).toBeNull();
   });
+});
+
+it('prepares The Board menu button for Home and requires HTTPS', () => {
+  expect(buildBoardMenuButton({ ...config, miniAppUrl: 'https://forms.example.com/mini-app?feature=poll' })).toEqual({
+    type: 'web_app',
+    text: 'The Board',
+    web_app: { url: 'https://forms.example.com/mini-app' },
+  });
+  expect(buildBoardMenuButton({ ...config, miniAppUrl: 'http://localhost:3000' })).toBeNull();
 });

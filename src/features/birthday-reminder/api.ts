@@ -11,6 +11,7 @@ export async function birthdayMember(telegram: Telegram, groupId: bigint, member
 
 export async function handleBirthdayAction(
   body: unknown, actorId: bigint, config: AppConfig, db: PrismaClient, telegram: Telegram, now = new Date(),
+  upcomingLimit = Infinity,
 ) {
   const preview = config.accessMode === 'PRELAUNCH';
   if (preview && actorId !== config.prelaunchOwnerId) {
@@ -55,14 +56,14 @@ export async function handleBirthdayAction(
         .map((record) => ({ memberId: record.memberId, ...nextOccurrence(record, today) }))
         .sort((a, b) => dateKey(a) - dateKey(b));
       const items = [];
-      for (let offset = 0; offset < dates.length; offset += 5) {
+      for (let offset = 0; offset < dates.length && items.length < upcomingLimit; offset += 5) {
         const verified = await Promise.all(dates.slice(offset, offset + 5).map(async ({ memberId, ...date }) => {
           const member = await birthdayMember(telegram, config.groupId, memberId);
           return member ? { name: member.first_name, ...date } : null;
         }));
         items.push(...verified.filter((item) => item !== null));
       }
-      return { status: 200, body: { items } };
+      return { status: 200, body: { items: items.slice(0, upcomingLimit) } };
     }
   }
 }

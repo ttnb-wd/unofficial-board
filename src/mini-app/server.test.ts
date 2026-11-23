@@ -58,6 +58,59 @@ describe('Mini App API', () => {
     vi.restoreAllMocks();
   });
 
+  it('serves Dashboard Home and reads only the owner’s preview data in PRELAUNCH', async () => {
+    const port = await getFreePort();
+    const createdAt = new Date('2026-11-20T12:00:00Z');
+    const findPolls = vi.fn().mockResolvedValue([{ question: 'Where next?', status: 'PRELAUNCH_PREVIEW', createdAt }]);
+    const findBirthday = vi.fn().mockResolvedValue({ month: 11, day: 23 });
+    const forbidden = vi.fn(() => { throw new Error('Preview accessed live group state'); });
+    const database = {
+      smartPoll: { findMany: findPolls },
+      budgetVote: { findMany: vi.fn().mockResolvedValue([]) },
+      birthday: { findUnique: findBirthday, findMany: forbidden },
+      planCountdown: { findMany: forbidden },
+      hangout: { findMany: forbidden },
+      groupBill: { findMany: forbidden },
+    } as unknown as PrismaClient;
+    const server = createMiniAppServer(
+      { ...config, miniAppPort: port }, database, { getChatMember: forbidden } as unknown as Telegram,
+      createLogger('silent'), 'test_bot',
+    );
+    await server.listen();
+    const base = `http://127.0.0.1:${port}`;
+    const post = (authorization: string) => fetch(base + '/api/dashboard', {
+      method: 'POST', headers: { Authorization: authorization },
+    });
+    try {
+      expect(await (await fetch(base + '/mini-app')).text()).toContain('id="board-home"');
+      for (const asset of ['board.js', 'home.js', 'votes.js', 'icons.svg', 'welcome.webp', 'poll.webp', 'budget.webp', 'bill.webp']) {
+        expect((await fetch(`${base}/mini-app/${asset}`)).status).toBe(200);
+      }
+      expect((await post('')).status).toBe(403);
+      expect((await post('tma ' + signedInitData(73))).status).toBe(403);
+      expect((await fetch(base + '/api/votes', { method: 'POST' })).status).toBe(403);
+      expect(findPolls).not.toHaveBeenCalled();
+      const response = await post('tma ' + signedInitData(42));
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({
+        name: 'Tester', preview: true,
+        birthday: { date: { month: 11, day: 23 } },
+        polls: [{ title: 'Where next?', status: 'PRELAUNCH_PREVIEW', createdAt: createdAt.toISOString() }],
+        budgets: [], plans: null, hangouts: null, birthdays: null, bills: null,
+        dashboardUrl: 'https://t.me/test_bot?start=dashboard',
+      });
+      expect(findPolls).toHaveBeenCalledWith(expect.objectContaining({
+        where: { groupId: config.groupId, creatorId: 42n, isPrelaunchTest: true, question: { not: null } },
+      }));
+      expect(findBirthday).toHaveBeenCalledWith(expect.objectContaining({
+        where: { groupId_memberId_preview: { groupId: config.groupId, memberId: 42n, preview: true } },
+      }));
+      expect(forbidden).not.toHaveBeenCalled();
+    } finally {
+      await server.close();
+    }
+  });
+
   it('keeps Hangout simulation owner-only and performs no Telegram or database operations', async () => {
     const port = await getFreePort();
     const use = vi.fn(() => { throw new Error('PRELAUNCH Hangout accessed external state'); });

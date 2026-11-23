@@ -104,7 +104,10 @@ function open(view) {
 
 function back() {
   if (busy) return;
-  if (stack.length < 2) return telegram?.close();
+  if (stack.length < 2) {
+    if (!window.BoardUI.backToBoard()) telegram?.close();
+    return;
+  }
   return run(async () => {
     message(notice);
     await render(stack.at(-2));
@@ -162,6 +165,8 @@ async function create() {
   title.required = true;
   title.placeholder = 'Dinner, taxi, tickets…';
   const total = numeric();
+  total.classList.add('bill-total');
+  total.placeholder = '0';
   const payer = el('select');
   for (const member of roster) {
     const option = el('option', member.name);
@@ -176,7 +181,7 @@ async function create() {
     method.append(option);
   }
   const members = el('fieldset', '', 'bill-members');
-  members.append(el('legend', 'Participants'));
+  members.append(el('legend', 'Members'));
   const checks = roster.map((member) => {
     const group = el('div', '', 'bill-member');
     const check = el('input');
@@ -185,7 +190,9 @@ async function create() {
     const share = numeric();
     share.setAttribute('aria-label', `Share for ${member.name}`);
     const choice = el('label', '', 'bill-choice');
-    choice.append(check, el('span', member.name));
+    const initials = el('span', [...member.name.trim()][0]?.toUpperCase() ?? '', 'member-avatar');
+    initials.setAttribute('aria-hidden', 'true');
+    choice.append(check, initials, el('span', member.name));
     const estimate = el('span', '', 'bill-muted');
     group.append(choice, share, estimate);
     members.append(group);
@@ -232,7 +239,7 @@ async function create() {
   };
   form.addEventListener('input', onEdit);
   form.addEventListener('change', onEdit);
-  const submit = el('button', session.preview ? 'Calculate & Preview' : 'Calculate & Create', 'primary-button');
+  const submit = el('button', session.preview ? 'Calculate & Preview' : 'Split Bill', 'primary-button');
   submit.type = 'submit';
   let signature;
   let key;
@@ -256,10 +263,11 @@ async function create() {
       message(notice, session.preview ? 'Simulation created for this session.' : 'Bill saved. The group announcement is queued.');
     });
   });
-  form.append(field('Bill title', title), field('Total MMK', total), field('Who paid?', payer), field('Split method', method),
-    members, summary, submit);
+  const settings = el('div', '', 'bill-settings');
+  settings.append(field('Who paid?', payer), field('Split method', method));
+  form.append(field('Total amount (MMK)', total), field('Bill title', title), settings, members, summary, submit);
   refresh();
-  screen('Create Bill', roster.length ? form : el('p', 'No eligible members are registered.', 'bill-card bill-muted'));
+  screen('Split a Bill', roster.length ? form : el('p', 'No eligible members are registered.', 'bill-card bill-muted'));
 }
 
 function ledgerViews(selected) {

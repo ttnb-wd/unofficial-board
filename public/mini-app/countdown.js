@@ -154,7 +154,7 @@ function button(label, callback, className) {
   return node;
 }
 
-const dateFormat = new Intl.DateTimeFormat('en-GB', { timeZone, dateStyle: 'medium', timeStyle: 'short' });
+const dateFormat = new Intl.DateTimeFormat('en-GB', { timeZone, dateStyle: 'medium', timeStyle: 'short', hour12: true });
 const formatDate = (value) => `${dateFormat.format(new Date(value))} · Yangon`;
 const labels = {
   create: 'Create Countdown', edit: 'Edit Countdown', upcoming: 'Upcoming Countdowns',
@@ -270,7 +270,7 @@ async function open(view, options = {}) {
   content.hidden = true;
   content.replaceChildren();
   byId('back').hidden = view === 'menu';
-  if (view === 'menu') tg?.BackButton?.hide();
+  if (view === 'menu' && !window.BoardUI.returnTab) tg?.BackButton?.hide();
   else tg?.BackButton?.show();
   heading.textContent = labels[view];
   loading.hidden = !['detail', ...listViews].includes(view);
@@ -305,7 +305,7 @@ async function open(view, options = {}) {
     }
     if (view === 'menu') {
       const entries = preview ? ['create', ...listViews, 'preview', 'member'] : ['create', ...listViews];
-      for (const entry of entries) content.append(button(labels[entry], () => void open(entry), entry === 'create' ? 'primary-button' : undefined));
+      for (const entry of entries) content.append(button(labels[entry], () => void open(entry, { returnView: 'menu' }), entry === 'create' ? 'primary-button' : undefined));
     }
     content.hidden = !content.childElementCount;
   } catch (failure) {
@@ -372,9 +372,10 @@ byId('back').addEventListener('click', goBack);
 function goBack() {
   if (busy) return;
   if (current.view === 'edit') void open('detail', { id: current.id, returnView: current.returnView, returnPage: current.returnPage });
-  else void open(current.returnView || 'menu', { pages: current.returnPage });
+  else if (current.returnView || !window.BoardUI.backToBoard()) void open(current.returnView || 'menu', { pages: current.returnPage });
 }
 byId('main-menu').addEventListener('click', () => {
+  if (window.BoardUI.backToBoard()) return;
   if (dashboardUrl) tg?.openTelegramLink?.(dashboardUrl);
   tg?.close();
 });

@@ -17,7 +17,7 @@ const titles = {
   detail: 'Hangout Details', preview: 'Group Invitation Preview', member: 'Member View',
 };
 const choices = { GOING: '🙌 Going', MAYBE: '🤔 Maybe', CANT: "😔 Can't" };
-const dateFormat = new Intl.DateTimeFormat('en-GB', { dateStyle: 'medium', timeStyle: 'short', timeZone: zone });
+const dateFormat = new Intl.DateTimeFormat('en-GB', { dateStyle: 'medium', timeStyle: 'short', timeZone: zone, hour12: true });
 
 let current = { view: 'menu' };
 let routeToken = 0;
@@ -337,7 +337,7 @@ async function open(view, options = {}, supplied) {
     current = { ...options, view, draft };
     get('heading').textContent = titles[view];
     get('back').hidden = view === 'menu';
-    if (view === 'menu') telegram?.BackButton?.hide?.();
+    if (view === 'menu' && !window.BoardUI.returnTab) telegram?.BackButton?.hide?.();
     else telegram?.BackButton?.show?.();
     if (view === 'create' || view === 'edit') renderForm(options.event);
     if (listViews.includes(view)) {
@@ -353,7 +353,7 @@ async function open(view, options = {}, supplied) {
     }
     if (view === 'menu') {
       for (const item of ['create', ...listViews, ...(preview ? ['preview', 'member'] : [])]) {
-        content.append(button(titles[item], () => void open(item), item === 'create' ? 'primary-button' : undefined));
+        content.append(button(titles[item], () => void open(item, { parent: { view: 'menu' } }), item === 'create' ? 'primary-button' : undefined));
       }
     }
     content.hidden = !content.childElementCount;
@@ -410,11 +410,13 @@ get('today').addEventListener('click', () => {
 
 function back() {
   if (busy) return;
+  if (!current.parent && window.BoardUI.backToBoard()) return;
   const parent = current.parent ?? { view: 'menu' };
   void open(parent.view, parent);
 }
 get('back').addEventListener('click', back);
 get('main-menu').addEventListener('click', () => {
+  if (window.BoardUI.backToBoard()) return;
   if (dashboardUrl) telegram?.openTelegramLink?.(dashboardUrl);
   telegram?.close();
 });

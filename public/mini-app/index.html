@@ -7,11 +7,14 @@
     <link rel="stylesheet" href="/mini-app/app.css">
     <script defer src="https://telegram.org/js/telegram-web-app.js"></script>
     <script defer src="/mini-app/config.js"></script>
+    <script defer src="/mini-app/board.js"></script>
     <script defer src="/mini-app/app.js"></script>
+    <script defer src="/mini-app/home.js"></script>
+    <script defer src="/mini-app/votes.js"></script>
   </head>
   <body>
-    <main class="shell">
-      <header class="feature-hero">
+    <main class="shell" id="board-shell">
+      <header class="feature-hero" id="form-hero" hidden>
         <h1 id="page-title">The Unofficial Board</h1>
       </header>
       <p id="launch-error" class="error" role="alert" hidden></p>
@@ -28,7 +31,46 @@
         <p id="form-error" class="error" role="alert" hidden></p>
         <button id="done" class="primary-button" type="submit">Done</button>
       </form>
+      <a id="form-my-stuff" class="secondary-button" hidden></a>
+      <a id="form-votes" class="secondary-button" hidden></a>
       <p id="success-message" class="success" role="status" tabindex="-1" hidden></p>
+      <section id="vote-content" class="dashboard-updates" hidden></section>
+      <div id="board-home" hidden>
+        <section id="home" class="board-panel" aria-label="Home">
+          <header class="welcome-hero">
+            <h1 id="welcome-title">Hey, Squad! <span class="welcome-wave">👋</span></h1>
+            <p>Plan, decide, split and keep your moments together.</p>
+          </header>
+          <div id="feature-grid" class="feature-grid" aria-label="Board features"></div>
+          <div id="home-updates" class="dashboard-updates"></div>
+        </section>
+        <section id="activity" class="board-panel" hidden>
+          <h1 tabindex="-1">Activity</h1>
+          <div id="activity-content" class="dashboard-updates"></div>
+        </section>
+        <section id="create" class="board-panel" hidden>
+          <h1 tabindex="-1">Create</h1>
+          <div id="create-grid" class="feature-grid"></div>
+        </section>
+        <section id="mine" class="board-panel" hidden>
+          <h1 tabindex="-1">My Stuff</h1>
+          <div id="my-stuff" class="dashboard-updates"></div>
+        </section>
+        <section id="more" class="board-panel" hidden>
+          <h1 tabindex="-1">More</h1>
+          <div id="more-content" class="dashboard-updates"></div>
+        </section>
+        <p id="dashboard-status" class="dashboard-status" role="status" hidden></p>
+        <button id="dashboard-retry" type="button" hidden>Refresh</button>
+      </div>
     </main>
+    <nav id="board-nav" class="bottom-nav" aria-label="Main navigation" hidden></nav>
+    <dialog id="quick-sheet" class="board-sheet" aria-labelledby="quick-title">
+      <div class="sheet-header">
+        <h2 id="quick-title">Quick actions</h2>
+        <form method="dialog"><button type="submit" class="icon-button" aria-label="Close quick actions" autofocus></button></form>
+      </div>
+      <div id="quick-actions" class="dashboard-updates"></div>
+    </dialog>
   </body>
 </html>
