@@ -4,10 +4,10 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
   <title>Plan Countdown · The Unofficial Board</title>
-  <link rel="stylesheet" href="/mini-app/app.css?v=countdown-picker-2">
+  <link rel="stylesheet" href="/mini-app/app.css?v=event-time-1">
   <script defer src="https://telegram.org/js/telegram-web-app.js"></script>
   <script defer src="/mini-app/config.js"></script>
-  <script type="module" src="/mini-app/countdown.js"></script>
+  <script type="module" src="/mini-app/countdown.js?v=event-time-1"></script>
 </head>
 <body>
   <main class="shell">
@@ -20,17 +20,16 @@
     <form id="plan-form" hidden>
       <label for="plan-title">Plan title</label>
       <input id="plan-title" name="title" maxlength="80" required>
-      <fieldset class="countdown-date-field">
+      <fieldset class="event-date-time-field">
         <legend>Event time · Asia/Yangon</legend>
-        <div class="countdown-date">
+        <div class="event-date-time">
           <div>
             <label for="plan-date">Date</label>
             <input id="plan-date" name="date" type="date" min="1000-01-01" max="9999-12-31" required>
           </div>
-          <div>
-            <label for="plan-time">Time</label>
-            <input id="plan-time" name="time" type="time" required>
-          </div>
+          <fieldset id="plan-time" class="event-time-field">
+            <legend>Time</legend>
+          </fieldset>
         </div>
       </fieldset>
       <label for="plan-description">Description <span class="countdown-muted">(optional)</span></label>

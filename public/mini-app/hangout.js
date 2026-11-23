@@ -1,12 +1,15 @@
+import { eventDateTimeParts, eventTimeZone, matchesEventDateTime, mountTimePicker } from './event-time.js?v=1';
+
 let telegram;
 const get = (id) => document.getElementById(`hangout-${id}`);
 const form = get('form');
+const timePicker = mountTimePicker(get('time'));
 const content = get('content');
 const navigation = get('navigation');
 const loading = get('loading');
 const error = get('error');
 class HangoutError extends Error {}
-const zone = 'Asia/Yangon';
+const zone = eventTimeZone;
 const listViews = ['active', 'mine', 'completed'];
 const titles = {
   menu: 'One Tap Hangout', create: 'Create Hangout', edit: 'Edit Hangout',
@@ -15,9 +18,6 @@ const titles = {
 };
 const choices = { GOING: '🙌 Going', MAYBE: '🤔 Maybe', CANT: "😔 Can't" };
 const dateFormat = new Intl.DateTimeFormat('en-GB', { dateStyle: 'medium', timeStyle: 'short', timeZone: zone });
-const formFormat = new Intl.DateTimeFormat('en-GB', {
-  timeZone: zone, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
-});
 
 let current = { view: 'menu' };
 let routeToken = 0;
@@ -104,11 +104,6 @@ function newDraftId() {
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }
 
-function formatParts(date) {
-  const parts = Object.fromEntries(formFormat.formatToParts(date).map(({ type, value }) => [type, value]));
-  return { date: `${parts.year}-${parts.month}-${parts.day}`, time: `${parts.hour}:${parts.minute}` };
-}
-
 function saveSimulation() {
   try { sessionStorage.setItem('hangout-simulation', JSON.stringify(events)); } catch {
     // The simulation remains usable in memory when session storage is unavailable.
@@ -177,7 +172,9 @@ function simulate(action, data, member) {
     const starts = Date.parse(`${data.date}T${data.time}:00+06:30`);
     if (!data.title || !Number.isFinite(starts) || starts <= now()) throw new HangoutError('Enter a title and choose a future time in Yangon.');
     const { title, place, description } = data;
-    const updates = { title, place, description, startsAt: new Date(starts).toISOString() };
+    const startsAt = event && matchesEventDateTime(event.startsAt, data.date, data.time)
+      ? event.startsAt : new Date(starts).toISOString();
+    const updates = { title, place, description, startsAt };
     if (action === 'edit') Object.assign(event, updates, { version: event.version + 1 });
     else {
       event = { ...updates, id: data.requestId, status: 'OPEN', owned: true, version: 1, participants: [] };
@@ -294,12 +291,13 @@ function renderList(result, view, pages) {
 
 function renderForm(event) {
   form.reset();
-  get('date').min = formatParts(new Date(now())).date;
+  get('date').min = eventDateTimeParts(new Date(now())).date;
   if (event) {
-    const parts = formatParts(new Date(event.startsAt));
-    for (const [key, value] of Object.entries({ ...parts, title: event.title, place: event.place, description: event.description })) {
+    const { date, time } = eventDateTimeParts(new Date(event.startsAt));
+    for (const [key, value] of Object.entries({ date, title: event.title, place: event.place, description: event.description })) {
       form.elements[key].value = value;
     }
+    timePicker.setValue(time);
   }
   get('save').textContent = event ? 'Save Changes' : 'Create Hangout';
   form.hidden = false;
@@ -374,6 +372,7 @@ function blocked(value) {
   navigation.inert = value;
   content.inert = value;
   form.inert = value;
+  timePicker.setDisabled(value);
 }
 
 async function mutate(action, payload, route, member = false) {
@@ -396,6 +395,8 @@ form.addEventListener('submit', (event) => {
   event.preventDefault();
   const data = Object.fromEntries([...new FormData(form)].map(([key, value]) => [key, value.trim()]));
   if (!data.title) { message('Enter a hangout title.'); return; }
+  data.time = timePicker.value();
+  if (!data.time) { message('Choose an hour, minute, and AM or PM in Yangon.'); return; }
   const editing = current.view === 'edit';
   void mutate(editing ? 'edit' : 'create', {
     ...data, timeZone: zone, ...(editing ? { id: current.id, version: current.event.version } : { requestId: current.draft }),
@@ -403,8 +404,8 @@ form.addEventListener('submit', (event) => {
 });
 
 get('today').addEventListener('click', () => {
-  get('date').value = formatParts(new Date(now())).date;
-  get('time').focus();
+  get('date').value = eventDateTimeParts(new Date(now())).date;
+  timePicker.focus();
 });
 
 function back() {

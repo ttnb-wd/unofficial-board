@@ -22,7 +22,7 @@ async function launchHangout() {
     const assets = Promise.all([
       loadScript('https://telegram.org/js/telegram-web-app.js'),
       loadScript('/mini-app/config.js?v=2'),
-      import('./hangout.js?v=2'),
+      import('./hangout.js?v=event-time-1'),
     ]);
     const [, , app] = await Promise.race([assets, deadline]);
     window.clearTimeout(timer);

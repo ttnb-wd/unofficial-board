@@ -290,28 +290,62 @@ button[aria-pressed="true"] { border-color: var(--feature-heading); }
 .birthday-picker > label { grid-row: 1; margin: 0; }
 .birthday-picker > select { grid-row: 2; }
 .birthday-remove { width: 100%; margin-top: 10px; }
-/* Plan Countdown */
-.countdown-date {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 132px), 1fr));
+/* Event date and time */
+.event-date-time-field { margin-block: 14px; }
+.event-date-time-field legend { color: var(--feature-heading); }
+.event-date-time {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
   gap: 12px;
 }
-.countdown-date-field { margin-block: 14px; }
-.countdown-date-field legend { color: var(--feature-heading); }
-.countdown-date > div { min-width: 0; }
-.countdown-date input {
+.event-date-time > div { flex: 1 1 122px; }
+.event-time-field { flex: 2 1 172px; }
+.event-date-time > *, .time-picker > div { min-width: 0; max-width: 100%; }
+.event-date-time input[type="date"], .time-picker select {
   display: block;
+  box-sizing: border-box;
   min-width: 0;
   max-width: 100%;
+}
+.event-date-time input[type="date"] {
   padding-inline: 6px;
   -webkit-appearance: none;
   appearance: none;
 }
-.countdown-date input::-webkit-date-and-time-value {
+.event-date-time input[type="date"]::-webkit-date-and-time-value {
   min-width: 0;
   margin: 0;
   text-align: start;
 }
+.time-picker {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr) minmax(0, 1.18fr);
+  align-items: end;
+  gap: 6px;
+}
+.time-picker > div { position: relative; }
+.time-picker > div::after {
+  content: "";
+  position: absolute;
+  inset-inline-end: 7px;
+  bottom: 22px;
+  width: 5px;
+  height: 5px;
+  border: solid currentColor;
+  border-width: 0 1px 1px 0;
+  transform: rotate(45deg);
+  pointer-events: none;
+}
+.time-picker select {
+  padding-inline: 5px 15px;
+  -webkit-appearance: none;
+  appearance: none;
+}
+.time-picker select:disabled { background: var(--feature-tint); }
+.time-picker-separator { line-height: 48px; }
+
+/* Plan Countdown */
 .countdown-muted { color: var(--text-secondary); font-weight: 400; }
 #plan-description { resize: vertical; }
 #plan-form .primary-button { margin-top: 12px; }
@@ -360,8 +394,6 @@ button[aria-pressed="true"] { border-color: var(--feature-heading); }
 /* One Tap Hangout */
 #hangout-reload { color: var(--feature-heading); }
 .hangout-field { margin-bottom: 12px; }
-.hangout-date { display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr); gap: 8px; }
-.hangout-date input { padding-inline: 6px; }
 #hangout-today { margin-top: 6px; }
 #hangout-description { resize: vertical; }
 .hangout-content { display: grid; gap: 10px; }

@@ -492,7 +492,7 @@ async function saveBudgetVote(
 
 async function serveAsset(
   response: ServerResponse,
-  fileName: 'index.html' | 'app.css' | 'app.js' | 'config.js' | 'bills.html' | 'bills.js' | 'birthday.html' | 'birthday.js' | 'countdown.html' | 'countdown.js' | 'countdown-clock.js' | 'hangout.html' | 'hangout.js' | 'hangout-launch.js',
+  fileName: 'index.html' | 'app.css' | 'app.js' | 'config.js' | 'bills.html' | 'bills.js' | 'birthday.html' | 'birthday.js' | 'countdown.html' | 'countdown.js' | 'countdown-clock.js' | 'event-time.js' | 'hangout.html' | 'hangout.js' | 'hangout-launch.js',
 ): Promise<void> {
   const contentTypes = {
     'index.html': 'text/html; charset=utf-8',
@@ -505,6 +505,7 @@ async function serveAsset(
     'countdown.html': 'text/html; charset=utf-8',
     'countdown.js': 'text/javascript; charset=utf-8',
     'countdown-clock.js': 'text/javascript; charset=utf-8',
+    'event-time.js': 'text/javascript; charset=utf-8',
     'birthday.js': 'text/javascript; charset=utf-8',
     'app.css': 'text/css; charset=utf-8',
     'app.js': 'text/javascript; charset=utf-8',
@@ -640,6 +641,9 @@ export function createMiniAppServer(
             return;
           case '/mini-app/countdown-clock.js':
             await serveAsset(response, 'countdown-clock.js');
+            return;
+          case '/mini-app/event-time.js':
+            await serveAsset(response, 'event-time.js');
             return;
           case '/mini-app/birthday':
             await serveAsset(response, 'birthday.html');

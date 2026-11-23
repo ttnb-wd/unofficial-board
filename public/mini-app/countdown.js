@@ -1,8 +1,10 @@
 import { countdownParts, yangonTimestamp } from './countdown-clock.js';
+import { eventDateTimeParts, eventTimeZone, matchesEventDateTime, mountTimePicker } from './event-time.js?v=1';
 
 const tg = window.Telegram?.WebApp;
 const byId = (id) => document.getElementById(id);
 const form = byId('plan-form');
+const timePicker = mountTimePicker(byId('plan-time'));
 const content = byId('content');
 const heading = byId('heading');
 const error = byId('error');
@@ -10,7 +12,7 @@ const save = byId('save');
 const loading = byId('loading');
 const navigation = byId('navigation');
 const params = new URLSearchParams(location.search);
-const timeZone = 'Asia/Yangon';
+const timeZone = eventTimeZone;
 
 let clockAt = Date.now();
 let clockAnchor = performance.now();
@@ -115,7 +117,9 @@ function simulate(action, data = {}) {
     }
     plan = {
       id: existing?.id || data.requestId, title: data.title, description: data.description,
-      startsAt: new Date(startsAt).toISOString(), owned: true, version: (existing?.version || 0) + 1,
+      startsAt: existing && matchesEventDateTime(existing.startsAt, data.date, data.time)
+        ? existing.startsAt : new Date(startsAt).toISOString(),
+      owned: true, version: (existing?.version || 0) + 1,
     };
   }
   fixtures = [...fixtures.filter((item) => item.id !== plan.id), plan];
@@ -162,13 +166,11 @@ function renderForm(plan) {
   form.reset();
   requestId = params.get('draft') || crypto.randomUUID();
   if (plan) {
-    const parts = Object.fromEntries(new Intl.DateTimeFormat('en-GB', {
-      timeZone, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
-    }).formatToParts(new Date(plan.startsAt)).map(({ type, value }) => [type, value]));
+    const { date, time } = eventDateTimeParts(new Date(plan.startsAt));
     form.elements.title.value = plan.title;
     form.elements.description.value = plan.description;
-    form.elements.date.value = `${parts.year}-${parts.month}-${parts.day}`;
-    form.elements.time.value = `${parts.hour}:${parts.minute}`;
+    form.elements.date.value = date;
+    timePicker.setValue(time);
   } else {
     const url = new URL(location.href);
     url.searchParams.set('draft', requestId);
@@ -320,6 +322,7 @@ async function open(view, options = {}) {
 function setBusy(value) {
   busy = value;
   save.disabled = value;
+  timePicker.setDisabled(value);
   navigation.inert = value;
   content.inert = value;
 }
@@ -345,6 +348,7 @@ form.addEventListener('submit', async (event) => {
   if (busy) return;
   const data = Object.fromEntries(new FormData(form));
   data.title = data.title.trim();
+  data.time = timePicker.value();
   const startsAt = yangonTimestamp(data.date, data.time);
   if (!data.title || !Number.isFinite(startsAt) || startsAt <= now()) {
     showError('Enter a title and choose a valid future date and time in Yangon.');

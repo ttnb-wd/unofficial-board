@@ -4,8 +4,8 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
   <title>One Tap Hangout · The Unofficial Board</title>
-  <link rel="stylesheet" href="/mini-app/app.css">
-  <script defer src="/mini-app/hangout-launch.js?v=2"></script>
+  <link rel="stylesheet" href="/mini-app/app.css?v=event-time-1">
+  <script defer src="/mini-app/hangout-launch.js?v=event-time-1"></script>
 </head>
 <body>
   <main class="shell">
@@ -24,17 +24,16 @@
         <label for="hangout-title">Hangout title</label>
         <input name="title" id="hangout-title" required maxlength="80">
       </div>
-      <fieldset class="hangout-field">
+      <fieldset class="hangout-field event-date-time-field">
         <legend>Event time · Asia/Yangon</legend>
-        <div class="hangout-date">
+        <div class="event-date-time">
           <div>
             <label for="hangout-date">Date</label>
             <input name="date" id="hangout-date" type="date" min="1000-01-01" max="9999-12-31" required>
           </div>
-          <div>
-            <label for="hangout-time">Time</label>
-            <input name="time" id="hangout-time" type="time" required>
-          </div>
+          <fieldset id="hangout-time" class="event-time-field">
+            <legend>Time</legend>
+          </fieldset>
         </div>
         <button id="hangout-today" type="button">Today</button>
       </fieldset>
