@@ -293,12 +293,25 @@ button[aria-pressed="true"] { border-color: var(--feature-heading); }
 /* Plan Countdown */
 .countdown-date {
   display: grid;
-  grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr);
-  gap: 8px;
-  margin-block: 14px;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 132px), 1fr));
+  gap: 12px;
 }
-.countdown-date input { padding-inline: 6px; }
-.countdown-date legend { color: var(--feature-heading); }
+.countdown-date-field { margin-block: 14px; }
+.countdown-date-field legend { color: var(--feature-heading); }
+.countdown-date > div { min-width: 0; }
+.countdown-date input {
+  display: block;
+  min-width: 0;
+  max-width: 100%;
+  padding-inline: 6px;
+  -webkit-appearance: none;
+  appearance: none;
+}
+.countdown-date input::-webkit-date-and-time-value {
+  min-width: 0;
+  margin: 0;
+  text-align: start;
+}
 .countdown-muted { color: var(--text-secondary); font-weight: 400; }
 #plan-description { resize: vertical; }
 #plan-form .primary-button { margin-top: 12px; }
@@ -345,6 +358,7 @@ button[aria-pressed="true"] { border-color: var(--feature-heading); }
 .countdown-list-card .countdown-tile { padding-block: 6px; }
 
 /* One Tap Hangout */
+#hangout-reload { color: var(--feature-heading); }
 .hangout-field { margin-bottom: 12px; }
 .hangout-date { display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr); gap: 8px; }
 .hangout-date input { padding-inline: 6px; }

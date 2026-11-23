@@ -1,6 +1,7 @@
 import type { PrismaClient } from '@prisma/client';
 import { Telegram } from 'telegraf';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { hangoutKeyboard } from '../features/one-tap-hangout/bot.js';
 import type { Update } from 'telegraf/types';
 import type { AppConfig } from '../config.js';
 import { createLogger } from '../logger.js';
@@ -94,10 +95,17 @@ describe('PRELAUNCH bot access', () => {
     const edit = apiCall.mock.calls.find(([method]) => method === 'editMessageText');
     expect(edit?.[1]).toMatchObject({ reply_markup: { inline_keyboard: [
       [{ text: 'Create Hangout', web_app: { url: 'https://mini.example/mini-app/hangout?view=create' } }],
-      [{ text: 'Active Hangouts' }], [{ text: 'My Hangouts' }], [{ text: 'Completed Hangouts' }],
-      [{ text: 'Preview Group Invitation' }], [{ text: 'Preview Member View' }],
+      [{ text: 'Active Hangouts', web_app: { url: 'https://mini.example/mini-app/hangout?view=active' } }],
+      [{ text: 'My Hangouts', web_app: { url: 'https://mini.example/mini-app/hangout?view=mine' } }],
+      [{ text: 'Completed Hangouts', web_app: { url: 'https://mini.example/mini-app/hangout?view=completed' } }],
+      [{ text: 'Preview Group Invitation', web_app: { url: 'https://mini.example/mini-app/hangout?view=preview' } }],
+      [{ text: 'Preview Member View', web_app: { url: 'https://mini.example/mini-app/hangout?view=member' } }],
       [{ text: 'Back' }, { text: 'Main Menu' }],
     ] } });
+    expect(hangoutKeyboard({ ...config, miniAppUrl: 'https://mini.example/mini-app' }, 'pizza')
+      .reply_markup.inline_keyboard[0]).toEqual([
+      { text: 'View Details', web_app: { url: 'https://mini.example/mini-app/hangout?view=detail&id=pizza' }, hide: false },
+    ]);
     expect(membershipCheck).not.toHaveBeenCalled();
   });
 

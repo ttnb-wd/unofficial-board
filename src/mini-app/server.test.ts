@@ -75,7 +75,15 @@ describe('Mini App API', () => {
     try {
       const page = await fetch(`http://127.0.0.1:${port}/mini-app/hangout`);
       expect(page.status).toBe(200);
-      expect(await page.text()).toContain('data-feature="one-tap-hangout"');
+      const html = await page.text();
+      expect(html).toContain('data-feature="one-tap-hangout"');
+      expect(html).toContain('/mini-app/hangout-launch.js');
+      for (const asset of ['hangout-launch.js', 'hangout.js', 'config.js']) {
+        const response = await fetch(`http://127.0.0.1:${port}/mini-app/${asset}?v=2`);
+        expect(response.status).toBe(200);
+        expect(response.headers.get('content-type')).toMatch(/javascript/);
+        expect(await response.text()).not.toBe('');
+      }
       expect((await post(73, 'session')).status).toBe(403);
       const owner = await post(42, 'session');
       expect(owner.status).toBe(200);

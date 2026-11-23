@@ -1,10 +1,11 @@
-const telegram = window.Telegram?.WebApp;
+let telegram;
 const get = (id) => document.getElementById(`hangout-${id}`);
 const form = get('form');
 const content = get('content');
 const navigation = get('navigation');
 const loading = get('loading');
 const error = get('error');
+class HangoutError extends Error {}
 const zone = 'Asia/Yangon';
 const listViews = ['active', 'mine', 'completed'];
 const titles = {
@@ -51,22 +52,56 @@ function button(text, click, css) {
 }
 
 async function api(action, payload = {}) {
-  if (!telegram?.initData) throw new Error('Open One Tap Hangout from the private bot chat.');
-  const response = await fetch(`${window.BOARD_API_ORIGIN || ''}/api/hangouts`, {
-    method: 'POST', credentials: 'omit', redirect: 'error', cache: 'no-store',
-    signal: AbortSignal.timeout(45_000),
-    headers: { Authorization: `tma ${telegram.initData}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ action, ...payload }),
-  });
-  const result = await response.json().catch(() => null);
-  if (!response.ok || !result) throw new Error(result?.error || 'Could not reach One Tap Hangout. Try again.');
-  const serverTime = Date.parse(result.serverNow);
+  if (!telegram?.initData) throw new HangoutError('Open One Tap Hangout from the private bot chat.');
+  if (typeof window.BOARD_API_ORIGIN !== 'string') {
+    throw new HangoutError('One Tap Hangout configuration could not load. Reopen it from the private bot chat.');
+  }
+  const controller = new window.AbortController();
+  const timer = window.setTimeout(() => controller.abort(), action === 'session' ? 90_000 : 45_000);
+  let response;
+  let result;
+  try {
+    response = await fetch(`${window.BOARD_API_ORIGIN}/api/hangouts`, {
+      method: 'POST', credentials: 'omit', redirect: 'error', cache: 'no-store',
+      signal: controller.signal,
+      headers: { Authorization: `tma ${telegram.initData}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action, ...payload }),
+    });
+    result = await response.json().catch(() => null);
+  } catch {
+    // Network errors are handled below without showing browser or proxy diagnostics.
+  } finally {
+    window.clearTimeout(timer);
+  }
+  if (controller.signal.aborted) throw new HangoutError('One Tap Hangout took too long to respond. Try again.');
+  if (!response || response.status >= 500) throw new HangoutError('Could not reach One Tap Hangout. Try again.');
+  if (response.status === 401 || response.status === 403) {
+    throw new HangoutError('Access was denied. Reopen One Tap Hangout from the authorized private bot chat.');
+  }
+  if (!response.ok) {
+    throw new HangoutError(action !== 'session' && typeof result?.error === 'string' ? result.error : 'The hangout request could not be completed.');
+  }
+  const serverTime = Date.parse(result?.serverNow);
+  if (!Number.isFinite(serverTime) ||
+      (action === 'session' && typeof result.preview !== 'boolean') ||
+      (listViews.includes(action) && !Array.isArray(result.hangouts)) ||
+      (action !== 'session' && !listViews.includes(action) && !result.hangout?.id)) {
+    throw new HangoutError('One Tap Hangout received an unexpected response. Try again.');
+  }
   if (Number.isFinite(serverTime) && serverTime >= lastServerTime) {
     clockAt = lastServerTime = serverTime;
     anchor = performance.now();
     wallAnchor = Date.now();
   }
   return result;
+}
+
+function newDraftId() {
+  const bytes = crypto.getRandomValues(new Uint8Array(16));
+  bytes[6] = (bytes[6] & 0x0f) | 0x40;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  const hex = Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('');
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }
 
 function formatParts(date) {
@@ -119,17 +154,17 @@ function simulate(action, data, member) {
       .sort((a, b) => (descending ? -1 : 1) * (a.startsAt.localeCompare(b.startsAt) || a.id.localeCompare(b.id)));
     const offset = data.cursor ? sorted.findIndex(({ id }) => id === data.cursor.id) + 1 : 0;
     const page = sorted.slice(offset, offset + 8);
-    const last = sorted.length > offset + 8 ? page.at(-1) : null;
+    const last = sorted.length > offset + 8 ? page[page.length - 1] : null;
     return { hangouts: page.map(present), nextCursor: last ? { id: last.id, startsAt: last.startsAt } : null };
   }
   let event = events.find(({ id }) => id === (data.id || data.requestId));
   if (action === 'detail' || (action === 'create' && event)) {
-    if (!event) throw new Error('Hangout not found.');
+    if (!event) throw new HangoutError('Hangout not found.');
     return { hangout: present(event) };
   }
-  if (action !== 'create' && (!event || statusOf(event) !== 'OPEN')) throw new Error('This hangout has closed.');
+  if (action !== 'create' && (!event || statusOf(event) !== 'OPEN')) throw new HangoutError('This hangout has closed.');
   if (['edit', 'cancel'].includes(action) && (member || !event.owned || data.version !== event.version)) {
-    throw new Error('This hangout changed or is unavailable.');
+    throw new HangoutError('This hangout changed or is unavailable.');
   }
   if (action === 'rsvp') {
     event.participants = [...event.participants.filter(({ key }) => key !== participant), {
@@ -140,7 +175,7 @@ function simulate(action, data, member) {
     event.version++;
   } else {
     const starts = Date.parse(`${data.date}T${data.time}:00+06:30`);
-    if (!data.title || !Number.isFinite(starts) || starts <= now()) throw new Error('Enter a title and choose a future time in Yangon.');
+    if (!data.title || !Number.isFinite(starts) || starts <= now()) throw new HangoutError('Enter a title and choose a future time in Yangon.');
     const { title, place, description } = data;
     const updates = { title, place, description, startsAt: new Date(starts).toISOString() };
     if (action === 'edit') Object.assign(event, updates, { version: event.version + 1 });
@@ -271,32 +306,45 @@ function renderForm(event) {
 }
 
 async function open(view, options = {}, supplied) {
-  if (!Object.hasOwn(titles, view) || (!preview && ['preview', 'member'].includes(view))) view = 'menu';
   const token = ++routeToken;
-  const url = new URL(location.href);
-  url.searchParams.set('view', view === 'edit' ? 'detail' : view);
-  if (options.id) url.searchParams.set('id', options.id);
-  else url.searchParams.delete('id');
-  const draft = view === 'create' ? url.searchParams.get('draft') || crypto.randomUUID() : null;
-  if (draft) url.searchParams.set('draft', draft);
-  else url.searchParams.delete('draft');
-  history.replaceState(null, '', url);
-  current = { ...options, view, draft };
   message();
   refreshState = undefined;
   form.hidden = true;
   content.hidden = true;
   content.replaceChildren();
-  get('heading').textContent = titles[view];
-  get('back').hidden = view === 'menu';
-  if (view === 'menu') telegram?.BackButton?.hide();
-  else telegram?.BackButton?.show();
+  loading.textContent = 'Opening One Tap Hangout…';
   loading.hidden = false;
   try {
+    if (!Object.prototype.hasOwnProperty.call(titles, view) ||
+        (!preview && ['preview', 'member'].includes(view)) ||
+        (view === 'detail' && !options.id) ||
+        (options.id && !/^[A-Za-z0-9_-]{1,48}$/.test(options.id)) ||
+        (view === 'edit' && !options.event)) {
+      message('This hangout link is invalid. Choose an option below or reopen it from the private bot chat.');
+      view = 'menu';
+      options = {};
+    }
+    const url = new URL(location.href);
+    url.searchParams.set('view', view === 'edit' ? 'detail' : view);
+    if (options.id) url.searchParams.set('id', options.id);
+    else url.searchParams.delete('id');
+    const previousDraft = url.searchParams.get('draft');
+    const draft = view === 'create' ? (
+      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(previousDraft)
+        ? previousDraft : newDraftId()
+    ) : null;
+    if (draft) url.searchParams.set('draft', draft);
+    else url.searchParams.delete('draft');
+    history.replaceState(null, '', url);
+    current = { ...options, view, draft };
+    get('heading').textContent = titles[view];
+    get('back').hidden = view === 'menu';
+    if (view === 'menu') telegram?.BackButton?.hide?.();
+    else telegram?.BackButton?.show?.();
     if (view === 'create' || view === 'edit') renderForm(options.event);
     if (listViews.includes(view)) {
       const pages = options.pages ?? [];
-      const result = await run(view, { cursor: pages.at(-1) });
+      const result = await run(view, { cursor: pages[pages.length - 1] });
       if (token !== routeToken) return;
       renderList(result, view, pages);
     }
@@ -313,8 +361,8 @@ async function open(view, options = {}, supplied) {
     content.hidden = !content.childElementCount;
   } catch (failure) {
     if (token !== routeToken) return;
-    message(failure.message);
-    content.append(button('Try Again', () => void open(view, options)));
+    message(failure instanceof HangoutError ? failure.message : 'One Tap Hangout received an unexpected response. Try again.');
+    content.replaceChildren(button('Try Again', () => void open(view, options)));
     content.hidden = false;
   } finally {
     if (token === routeToken) loading.hidden = true;
@@ -338,7 +386,7 @@ async function mutate(action, payload, route, member = false) {
     const parent = action === 'edit' ? route.parent?.parent : route.parent;
     await open(view, { id: hangout.id, parent }, hangout);
   } catch (failure) {
-    message(failure.message);
+    message(failure instanceof HangoutError ? failure.message : 'One Tap Hangout received an unexpected response. Try again.');
   } finally {
     blocked(false);
   }
@@ -383,26 +431,29 @@ document.addEventListener('visibilitychange', () => {
   void api('session').then(() => refreshState?.()).catch(() => {});
 });
 
-async function initialize() {
+export async function initialize() {
   message();
+  content.hidden = true;
+  get('preview').hidden = true;
+  loading.textContent = 'Connecting to One Tap Hangout. The server may take a moment to wake up.';
   loading.hidden = false;
   try {
+    telegram = window.Telegram?.WebApp;
+    telegram?.ready?.();
+    telegram?.expand?.();
     const session = await api('session');
     preview = session.preview;
     dashboardUrl = session.dashboardUrl;
     if (preview) events = simulationFixtures();
     get('preview').hidden = !preview;
     navigation.hidden = false;
-    telegram?.BackButton?.onClick(back);
+    telegram?.BackButton?.onClick?.(back);
     const params = new URLSearchParams(location.search);
     await open(params.get('view') || 'menu', { id: params.get('id') ?? undefined });
   } catch (failure) {
     loading.hidden = true;
-    message(failure.message);
+    message(failure instanceof HangoutError ? failure.message : 'One Tap Hangout could not start. Try again.');
     content.replaceChildren(button('Try Again', () => void initialize()));
     content.hidden = false;
   }
 }
-telegram?.ready();
-telegram?.expand();
-void initialize();

@@ -5,9 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
   <title>One Tap Hangout · The Unofficial Board</title>
   <link rel="stylesheet" href="/mini-app/app.css">
-  <script defer src="https://telegram.org/js/telegram-web-app.js"></script>
-  <script defer src="/mini-app/config.js"></script>
-  <script type="module" src="/mini-app/hangout.js"></script>
+  <script defer src="/mini-app/hangout-launch.js?v=2"></script>
 </head>
 <body>
   <main class="shell">
@@ -16,7 +14,11 @@
       <h1 id="hangout-heading">One Tap Hangout</h1>
     </header>
     <p id="hangout-error" class="error" role="alert" hidden></p>
-    <p id="hangout-loading" class="bill-card" role="status">Opening One Tap Hangout…</p>
+    <div id="hangout-launch-error" class="bill-card">
+      <p role="alert">One Tap Hangout could not load. Try again or reopen it from the private bot chat.</p>
+      <a id="hangout-reload" href="">Try Again</a>
+    </div>
+    <p id="hangout-loading" class="bill-card" role="status" hidden>Opening One Tap Hangout…</p>
     <form id="hangout-form" hidden>
       <div class="hangout-field">
         <label for="hangout-title">Hangout title</label>
