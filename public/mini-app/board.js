@@ -10,7 +10,6 @@
     'birthday-reminder': { icon: 'birthday', label: 'Birthday Reminder', action: 'Birthday Reminder', description: 'Never miss a birthday', intro: 'Save your birthday and see who’s celebrating next.', path: '/birthday' },
     'plan-countdown': { icon: 'countdown', label: 'Plan Countdown', action: 'Plan Countdown', description: 'Count down to your next plan', intro: 'Keep track of what the group has planned.', path: '/countdown' },
     'one-tap-hangout': { icon: 'hangout', label: 'One Tap Hangout', action: 'One Tap Hangout', description: 'Quickly plan a hangout', intro: 'Make a plan and see who’s coming.', path: '/hangout' },
-    'shared-memory-vault': { icon: 'vault', label: 'Shared Memory Vault', description: 'Coming soon' },
   };
   const feature = document.documentElement.dataset.feature || params.get('feature');
   const from = params.get('from');

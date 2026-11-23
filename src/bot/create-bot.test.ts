@@ -32,13 +32,13 @@ function messageUpdate(
       chat,
       from: { id: userId, is_bot: false, first_name: 'Tester' },
       text,
-      entities: [
+      entities: text.startsWith('/') ? [
         {
           offset: 0,
           length: text.split(' ')[0]?.length ?? text.length,
           type: 'bot_command',
         },
-      ],
+      ] : [],
     },
   };
 }
@@ -167,6 +167,21 @@ describe('PRELAUNCH bot access', () => {
         text: 'Open private dashboard', url: 'https://t.me/test_bot?start=dashboard', hide: false,
       }]] },
     }));
+    apiCall.mockClear();
+    const memberChat = { id: 73, type: 'private', first_name: 'Fixture member' } as const;
+    await bot.handleUpdate(messageUpdate(73, memberChat, '/menu'));
+    expect(apiCall).toHaveBeenCalledWith('sendMessage', expect.objectContaining({
+      chat_id: 73, reply_markup: expect.objectContaining({ resize_keyboard: true }),
+    }));
+    apiCall.mockClear();
+    await bot.handleUpdate(messageUpdate(73, memberChat, '📊 Smart Poll'));
+    expect(apiCall).toHaveBeenCalledWith('sendMessage', expect.objectContaining({
+      chat_id: 73,
+      reply_markup: { inline_keyboard: [[{
+        text: '📊 Smart Poll', hide: false,
+        web_app: { url: 'https://mini.example/mini-app?feature=poll&view=votes' },
+      }]] },
+    }));
   });
 
   it('opens Birthday Reminder directly as an owner-only Mini App', async () => {
@@ -207,13 +222,60 @@ describe('PRELAUNCH bot access', () => {
     expect(screen).toMatchObject({
       reply_markup: { inline_keyboard: [
         [webApp('Smart Poll', '/mini-app?feature=poll&view=votes'), webApp('Bill Splitter', '/mini-app/bills?view=mine')],
-        [webApp('Birthday Reminder', '/mini-app/birthday'), { text: 'Shared Memory Vault', callback_data: 'feature:shared-memory-vault' }],
-        [webApp('Plan Countdown', '/mini-app/countdown'), webApp('One Tap Hangout', '/mini-app/hangout')],
-        [webApp('Group Budget Vote', '/mini-app?feature=budget&view=votes')],
+        [webApp('Birthday Reminder', '/mini-app/birthday'), webApp('Plan Countdown', '/mini-app/countdown')],
+        [webApp('One Tap Hangout', '/mini-app/hangout'), webApp('Group Budget Vote', '/mini-app?feature=budget&view=votes')],
       ] },
     });
+    const nativeKeyboards = apiCall.mock.calls.filter(([, payload]) => JSON.stringify(payload).includes('"resize_keyboard"'));
+    if (command) {
+      expect(nativeKeyboards).toEqual([['sendMessage', expect.objectContaining({
+        reply_markup: {
+          keyboard: [
+            [{ text: '📊 Smart Poll' }, { text: '💰 Budget Vote' }],
+            [{ text: '🧾 Bill Splitter' }, { text: '🎂 Birthday' }],
+            [{ text: '⏳ Countdown' }, { text: '🍕 Hangout' }],
+          ],
+          resize_keyboard: true,
+          is_persistent: false,
+          one_time_keyboard: true,
+          input_field_placeholder: 'Select an option',
+        },
+      })]]);
+    } else {
+      expect(nativeKeyboards).toHaveLength(0);
+    }
+    expect(JSON.stringify(apiCall.mock.calls)).not.toContain('Shared Memory Vault');
     expect(membershipCheck).not.toHaveBeenCalled();
     expect(database.$transaction).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['📊 Smart Poll', '/mini-app?feature=poll&view=votes'],
+    ['💰 Budget Vote', '/mini-app?feature=budget&view=votes'],
+    ['🧾 Bill Splitter', '/mini-app/bills?view=mine'],
+    ['🎂 Birthday', '/mini-app/birthday'],
+    ['⏳ Countdown', '/mini-app/countdown'],
+    ['🍕 Hangout', '/mini-app/hangout'],
+  ])('offers the authorized inline shortcut for %s', async (text, path) => {
+    const { bot, apiCall, membershipCheck } = setupBot();
+    await bot.handleUpdate(messageUpdate(73, { id: 73, type: 'private', first_name: 'Guest' }, text));
+    await bot.handleUpdate(messageUpdate(42, { id: Number(config.groupId), type: 'supergroup', title: 'Fixture group' }, text));
+    expect(apiCall).not.toHaveBeenCalled();
+    await bot.handleUpdate(messageUpdate(42, { id: 42, type: 'private', first_name: 'Owner' }, text));
+    expect(apiCall).toHaveBeenCalledExactlyOnceWith('sendMessage', expect.objectContaining({
+      chat_id: 42,
+      reply_markup: { inline_keyboard: [[{ text, hide: false, web_app: { url: 'https://mini.example' + path } }]] },
+    }));
+    expect(membershipCheck).not.toHaveBeenCalled();
+  });
+
+  it('does not consume ordinary text as an options shortcut', async () => {
+    const { bot, apiCall } = setupBot();
+    const onText = vi.fn();
+    bot.on('text', onText);
+    await bot.handleUpdate(messageUpdate(42, { id: 42, type: 'private', first_name: 'Owner' }, 'Typing a normal message'));
+    expect(onText).toHaveBeenCalledOnce();
+    expect(apiCall).not.toHaveBeenCalled();
   });
 
   it('keeps callback menus when an HTTPS launch URL is unavailable', async () => {
@@ -476,18 +538,23 @@ describe('creator and member voting', () => {
     expect(apiCall.mock.calls.some(([method]) => method === 'sendMessage')).toBe(false);
   });
 
-  it('gives all seven menus dashboard navigation', async () => {
+  it('gives all six legacy menus dashboard navigation', async () => {
     const db = { birthday: { findUnique: vi.fn().mockResolvedValue(null) } } as unknown as PrismaClient;
     const { bot, apiCall } = setupBot(db);
     for (const id of ['smart-poll', 'group-budget-vote', 'bill-splitter', 'one-tap-hangout',
-      'shared-memory-vault', 'plan-countdown', 'birthday-reminder']) {
+      'plan-countdown', 'birthday-reminder']) {
       await bot.handleUpdate(callbackUpdate(42, `feature:${id}`));
     }
-    expect(screens(apiCall)).toHaveLength(7);
+    expect(screens(apiCall)).toHaveLength(6);
     for (const screen of screens(apiCall)) {
       expect(screen).toContain('"text":"Back","callback_data":"nav:home"');
       expect(screen).toContain('"text":"Main Menu","callback_data":"nav:home"');
     }
+    apiCall.mockClear();
+    await bot.handleUpdate(callbackUpdate(42, 'feature:shared-memory-vault'));
+    expect(screens(apiCall)).toHaveLength(0);
+    expect(apiCall).toHaveBeenCalledOnce();
+    expect(apiCall.mock.calls[0]?.[0]).toBe('answerCallbackQuery');
   });
 
   it.each(['poll', 'bv'] as const)('requires membership and replaces a repeat %s ballot using its transaction', async (kind) => {

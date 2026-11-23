@@ -16,7 +16,10 @@ import { hangoutKeyboard, registerHangoutMenu } from '../features/one-tap-hangou
 import { registerVoting } from './voting.js';
 import {
   dashboardKeyboard,
+  featureEntryButton,
   featureKeyboard,
+  featureOptionRows,
+  optionsKeyboard,
   showScreen,
 } from './navigation.js';
 
@@ -45,6 +48,11 @@ export function createBot(
       allowGroupChat,
     );
 
+  async function showPrivateDashboard(ctx: Context) {
+    await ctx.reply(dashboardText(), dashboardKeyboard(config));
+    await ctx.reply('Use the keyboard icon to switch between bot options and typing.', optionsKeyboard());
+  }
+
   bot.use(async (ctx, next) => {
     if (config.accessMode === 'PRELAUNCH' && ctx.chat?.type !== 'private') {
       return;
@@ -63,7 +71,7 @@ export function createBot(
         await ctx.reply('I could not verify your group access. Please try again later.');
         return;
       }
-      await ctx.reply(dashboardText(), dashboardKeyboard(config));
+      await showPrivateDashboard(ctx);
       return;
     }
 
@@ -139,11 +147,16 @@ export function createBot(
       return;
     }
 
-    await ctx.reply(
-      dashboardText(),
-      dashboardKeyboard(config),
-    );
+    await showPrivateDashboard(ctx);
   });
+
+  for (const { id, text } of featureOptionRows.flat()) {
+    bot.hears(text, async (ctx, next) => {
+      if (ctx.chat.type !== 'private') return next();
+      if (await checkPrivateAccess(ctx, config, database, logger) !== 'active') return;
+      await ctx.reply('Open this feature in The Board.', Markup.inlineKeyboard([featureEntryButton(config, id, text)]));
+    });
+  }
 
   registerSmartPollHandlers(bot, config, database, logger, authorize);
   registerBudgetVoteHandlers(bot, config, database, logger, authorize);

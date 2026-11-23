@@ -168,7 +168,6 @@
       link('Upcoming birthdays', 'birthday-reminder', '/birthday?view=upcoming', 'more'),
       link('Upcoming countdowns', 'plan-countdown', '/countdown?view=upcoming', 'more'),
       link('Active hangouts', 'one-tap-hangout', '/hangout?view=active', 'more'),
-      note('Shared Memory Vault · Coming soon'),
     ]));
   }
 

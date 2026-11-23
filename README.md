@@ -132,6 +132,21 @@ leaves the menu button setting to the operator. Signed Telegram launch data
 expires after five minutes.
 [Telegram Mini Apps](https://core.telegram.org/bots/webapps)
 
+In an authorized private chat, `/start` and `/menu` send the inline shortcuts
+and install the native reply keyboard. Telegram is asked to resize the keyboard
+and hide it after a selection. The keyboard icon should make it available again.
+Reply-keyboard Web Apps receive empty `initData`, so the reply options send a
+message to the bot and return an authenticated inline shortcut to the feature.
+The inline menu itself opens feature homes in one tap.
+
+Before rollout, check this on a real iPhone using an isolated PRELAUNCH bot
+in the owner's private chat. Run both commands, switch to normal typing, and
+reopen options with the keyboard icon. Select each option, check that it hides
+the options and returns the matching inline shortcut, then open that shortcut.
+Check that the blue **The Board** button still opens the full dashboard.
+[Reply keyboard behavior](https://core.telegram.org/bots/api#replykeyboardmarkup)
+[Telegram launch data](https://core.telegram.org/bots/webapps#webappinitdata)
+
 ## Access lifecycle
 
 - **PRELAUNCH (default):** only the configured owner in a private chat is
@@ -207,16 +222,6 @@ Create bills and review debts from the private bot menu. See the
 Save or remove your birthday from the private bot menu and see upcoming group
 birthdays. See the [Birthday Reminder guide](docs/BIRTHDAY-REMINDER.md) for
 PRELAUNCH previews, migration, and delivery recovery.
-
-## Other confirmed features
-
-1. Shared Memory Vault
-2. Plan Countdown
-3. One Tap Hangout
-
-These remain scaffolds. Memory Vault is intended to let every current group
-member create albums, upload photos, view albums, and share memories without
-approval once its workflows are built.
 
 ## Validation
 
