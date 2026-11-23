@@ -506,6 +506,7 @@ const scriptAssets = new Set([
 const otherAssets = new Map([
   ['app.css', 'text/css; charset=utf-8'],
   ['icons.svg', 'image/svg+xml'],
+  ['board-logo.png', 'image/png'],
   ['welcome.webp', 'image/webp'],
   ['poll.webp', 'image/webp'],
   ['budget.webp', 'image/webp'],

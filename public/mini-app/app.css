@@ -199,10 +199,23 @@ input::file-selector-button {
 }
 .amount-input, .bill-row, .bill-allocation { font-variant-numeric: tabular-nums; }
 fieldset:disabled input { background: var(--feature-tint); }
-:focus-visible { outline: 2px solid var(--feature-focus); outline-offset: -3px; }
+:focus-visible:not(:where(input, select, textarea)) { outline: 2px solid var(--feature-focus); outline-offset: -3px; }
 :is(h1, h2, .success)[tabindex="-1"]:focus-visible { outline: none; }
-:is(input:not([type="checkbox"]), select, textarea):focus { border-color: var(--feature-focus); }
-input[aria-invalid="true"] { border-color: var(--danger); }
+:is(input, select, textarea):focus { outline: none; }
+
+:where(:root:not([data-pointer-focus])) :is(input:not(:where([type="checkbox"], [type="radio"], .choice-row input, .bill-total)), select, textarea):focus-visible,
+:where(:root:not([data-pointer-focus])) :is(.choice-row, .ballot-option):has(> input:focus-visible),
+:where(:root:not([data-pointer-focus])) .bill-field:has(> .bill-total:focus-visible) {
+  border-color: var(--input-focus-color, var(--feature-focus));
+}
+
+:is(input, select, textarea)[aria-invalid="true"],
+.choice-row:has(> input[aria-invalid="true"]),
+.bill-field:has(> .bill-total[aria-invalid="true"]) { border-color: var(--danger); }
+
+@media (forced-colors: active) {
+  :root { --input-focus-color: Highlight; --input-focus-ink: HighlightText; }
+}
 
 .choices-section { margin-top: 16px; }
 .choice-list { display: grid; gap: 8px; }
@@ -218,7 +231,6 @@ input[aria-invalid="true"] { border-color: var(--danger); }
   box-shadow: var(--card-shadow);
   transition: box-shadow var(--press-time) ease, border-color var(--press-time) ease;
 }
-.choice-row:focus-within { border-color: var(--feature-focus); }
 .choice-row input:not([type="checkbox"]) { border: 0; background: transparent; box-shadow: none; padding-inline: 6px; }
 .choice-icon { color: var(--feature-heading); }
 [data-feature="budget"] .choice-row .amount-input { font-weight: 730; }
@@ -324,9 +336,10 @@ button[aria-pressed="true"] {
 .bill-field .bill-total:not([type="checkbox"]) {
   min-height: 43px;
   margin-top: 0;
-  padding: 4px 3px;
-  border-color: transparent;
+  padding: 5px 4px;
+  border: 0;
   background: transparent;
+  box-shadow: none;
   color: var(--action-ink);
   font-size: 23px;
   font-weight: 740;
@@ -366,6 +379,11 @@ button[aria-pressed="true"] {
   margin: 0;
 }
 .bill-choice input { flex: 0 0 20px; width: 20px; height: 20px; margin: 0; accent-color: var(--feature-focus); }
+:where(:root:not([data-pointer-focus])) .bill-choice:has(> input:focus-visible) > .member-avatar {
+  background: var(--input-focus-color, var(--feature-focus));
+  color: var(--input-focus-ink, var(--feature-surface));
+  forced-color-adjust: none;
+}
 .bill-member > .amount-input { flex: 1 1 110px; max-width: 155px; }
 .bill-muted { color: var(--text-secondary); font-size: 14px; }
 .bill-allocation:empty, .bill-member > .bill-muted:empty { display: none; }
@@ -543,26 +561,18 @@ button[aria-pressed="true"] {
   font-weight: 770;
   line-height: 1.2;
 }
-.app-brand > .board-icon {
-  width: 36px;
-  height: 36px;
-  padding: 6px;
-  border: 1px solid #ffffff99;
-  border-radius: 11px;
-  background: var(--action-fill);
-  box-shadow: var(--card-shadow);
-  color: var(--action-ink);
-}
-.board-dashboard .app-brand > .board-icon {
-  background: linear-gradient(155deg, #bf97e9, #8b59be);
-  color: #fff;
+.board-logo {
+  display: block;
+  flex: none;
+  object-fit: contain;
+  clip-path: inset(2% 2% 2% 2% round 31%);
 }
 .app-bar-feature { justify-content: center; padding-inline: 42px; }
 .app-bar-feature .app-brand > .board-icon {
   width: 26px;
   height: 26px;
   padding: 3px;
-  box-shadow: none;
+  border-radius: 9px;
   color: var(--feature-heading);
   background: var(--feature-tint);
 }
@@ -704,9 +714,8 @@ button[aria-pressed="true"] {
 .ballot-option:has(:checked) {
   background-color: var(--feature-tint);
   border-color: var(--feature-secondary);
-  box-shadow: inset 0 0 0 1px var(--feature-secondary), var(--card-shadow);
+  box-shadow: var(--card-shadow);
 }
-.ballot-option:has(:focus-visible) { outline: 2px solid var(--feature-focus); outline-offset: -3px; }
 .ballot-option:has(:disabled) { cursor: default; }
 .ballot-option strong { font-size: clamp(16px, 4.7vw, 20px); }
 .ballot-mark {

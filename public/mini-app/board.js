@@ -16,6 +16,16 @@
   const from = params.get('from');
   const returnTab = tabs.includes(from) ? from : null;
 
+  // Browsers can match :focus-visible on text fields even after a tap.
+  document.addEventListener('pointerdown', () => {
+    document.documentElement.setAttribute('data-pointer-focus', '');
+  }, { capture: true, passive: true });
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Tab' || event.key.startsWith('Arrow')) {
+      document.documentElement.removeAttribute('data-pointer-focus');
+    }
+  }, { capture: true });
+
   function element(tag, className, text) {
     const node = document.createElement(tag);
     if (className) node.className = className;
@@ -57,7 +67,7 @@
     return true;
   }
 
-  function header(title, image, back) {
+  function header(title, symbol, back) {
     const bar = element('div', back ? 'app-bar app-bar-feature' : 'app-bar');
     if (back) {
       const control = element('button', 'icon-button app-back');
@@ -68,7 +78,14 @@
       bar.append(control);
     }
     const brand = element('div', 'app-brand');
-    brand.append(icon(image), element('span', '', title));
+    const mark = symbol === 'board' ? element('img', 'board-logo') : icon(symbol);
+    if (symbol === 'board') {
+      mark.src = base + '/board-logo.png';
+      mark.alt = '';
+      mark.width = 40;
+      mark.height = 40;
+    }
+    brand.append(mark, element('span', '', title));
     bar.append(brand);
     return bar;
   }

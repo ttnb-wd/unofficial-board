@@ -83,7 +83,7 @@ describe('Mini App API', () => {
     });
     try {
       expect(await (await fetch(base + '/mini-app')).text()).toContain('id="board-home"');
-      for (const asset of ['board.js', 'home.js', 'votes.js', 'icons.svg', 'welcome.webp', 'poll.webp', 'budget.webp', 'bill.webp']) {
+      for (const asset of ['board.js', 'home.js', 'votes.js', 'icons.svg', 'board-logo.png', 'welcome.webp', 'poll.webp', 'budget.webp', 'bill.webp']) {
         expect((await fetch(`${base}/mini-app/${asset}`)).status).toBe(200);
       }
       expect((await post('')).status).toBe(403);
