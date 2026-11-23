@@ -15,7 +15,7 @@ async function main(): Promise<void> {
   try {
     await database.$connect();
     const identity = await new Telegraf(config.botToken).telegram.getMe();
-    const bot = createBot(config, database, identity.username, logger);
+    const bot = createBot(config, database, identity.username, logger, () => miniAppServer?.wakeHangouts());
     miniAppServer = createMiniAppServer(
       config,
       database,

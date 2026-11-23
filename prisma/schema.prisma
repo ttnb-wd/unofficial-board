@@ -104,6 +104,8 @@ model GroupMembership {
   albums          MemoryAlbum[]         @relation("AlbumCreator")
   uploads         MemoryPhoto[]         @relation("PhotoUploader")
 
+  hangoutResponses  HangoutResponse[]
+
   @@id([groupId, memberId])
   @@index([memberId])
   @@index([groupId, status])
@@ -298,6 +300,16 @@ model Hangout {
   creator     Member        @relation(fields: [creatorId], references: [telegramId], onDelete: Restrict)
   budgetVotes BudgetVote[]
 
+  requestId   String?
+  place       String        @default("")
+  description String        @default("")
+  version     Int           @default(1)
+  cancelledAt DateTime?     @db.Timestamptz(3)
+  responses   HangoutResponse[]
+  invitation  HangoutInvitation?
+
+  @@unique([groupId, creatorId, requestId])
+  @@index([groupId, startsAt, id])
   @@unique([id, groupId])
   @@index([groupId, status, startsAt])
 }
@@ -497,4 +509,50 @@ model PlanCountdownDelivery {
 
   @@id([countdownId, kind])
   @@index([status, nextAttemptAt])
+}
+
+enum HangoutRsvp {
+  GOING
+  MAYBE
+  CANT
+}
+
+enum HangoutInvitationStatus {
+  QUEUED
+  SENDING
+  SENT
+  UNKNOWN
+  FAILED
+  EXPIRED
+}
+
+model HangoutResponse {
+  hangoutId   String
+  groupId     BigInt
+  memberId    BigInt
+  response    HangoutRsvp
+  displayName String
+  updateId    BigInt?
+  respondedAt DateTime        @db.Timestamptz(3)
+  hangout     Hangout         @relation(fields: [hangoutId, groupId], references: [id, groupId], onDelete: Restrict)
+  membership  GroupMembership @relation(fields: [groupId, memberId], references: [groupId, memberId], onDelete: Restrict)
+
+  @@id([hangoutId, memberId])
+  @@index([groupId, memberId])
+}
+
+model HangoutInvitation {
+  hangoutId      String                  @id
+  status         HangoutInvitationStatus @default(QUEUED)
+  nextAttemptAt  DateTime                @db.Timestamptz(3)
+  attemptAt      DateTime?               @db.Timestamptz(3)
+  attempts       Int                     @default(0)
+  messageId      Int?
+  syncAt         DateTime?               @db.Timestamptz(3)
+  syncAttempts   Int                     @default(0)
+  unavailableAt  DateTime?               @db.Timestamptz(3)
+  hangout        Hangout                 @relation(fields: [hangoutId], references: [id], onDelete: Restrict)
+
+  @@index([status, nextAttemptAt])
+  @@index([status, syncAt])
 }

@@ -8,7 +8,8 @@
     { "source": "/mini-app", "destination": "/mini-app/index.html" },
     { "source": "/mini-app/bills", "destination": "/mini-app/bills.html" },
     { "source": "/mini-app/birthday", "destination": "/mini-app/birthday.html" },
-    { "source": "/mini-app/countdown", "destination": "/mini-app/countdown.html" }
+    { "source": "/mini-app/countdown", "destination": "/mini-app/countdown.html" },
+    { "source": "/mini-app/hangout", "destination": "/mini-app/hangout.html" }
   ],
   "headers": [
     {

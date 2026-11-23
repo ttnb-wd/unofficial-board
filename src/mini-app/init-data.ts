@@ -2,6 +2,8 @@ import { createHmac, timingSafeEqual } from 'node:crypto';
 
 export type TelegramMiniAppUser = {
   id: bigint;
+  first_name?: string;
+  last_name?: string;
 };
 
 const MAX_INIT_DATA_AGE_SECONDS = 300;
@@ -79,7 +81,11 @@ export function validateTelegramInitData(
     ) {
       return null;
     }
-    return { id: BigInt(user.id) };
+    return {
+      id: BigInt(user.id),
+      ...('first_name' in user && typeof user.first_name === 'string' ? { first_name: user.first_name } : {}),
+      ...('last_name' in user && typeof user.last_name === 'string' ? { last_name: user.last_name } : {}),
+    };
   } catch {
     return null;
   }

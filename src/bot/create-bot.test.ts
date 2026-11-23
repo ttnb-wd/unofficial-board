@@ -86,6 +86,21 @@ describe('PRELAUNCH bot access', () => {
     vi.restoreAllMocks();
   });
 
+  it('opens the Hangout form directly and exposes only owner simulation buttons', async () => {
+    const { bot, apiCall, membershipCheck } = setupBot();
+    await bot.handleUpdate(callbackUpdate(73, 'feature:one-tap-hangout'));
+    expect(apiCall.mock.calls.map(([method]) => method)).toEqual(['answerCallbackQuery']);
+    await bot.handleUpdate(callbackUpdate(42, 'feature:one-tap-hangout'));
+    const edit = apiCall.mock.calls.find(([method]) => method === 'editMessageText');
+    expect(edit?.[1]).toMatchObject({ reply_markup: { inline_keyboard: [
+      [{ text: 'Create Hangout', web_app: { url: 'https://mini.example/mini-app/hangout?view=create' } }],
+      [{ text: 'Active Hangouts' }], [{ text: 'My Hangouts' }], [{ text: 'Completed Hangouts' }],
+      [{ text: 'Preview Group Invitation' }], [{ text: 'Preview Member View' }],
+      [{ text: 'Back' }, { text: 'Main Menu' }],
+    ] } });
+    expect(membershipCheck).not.toHaveBeenCalled();
+  });
+
   it('launches the countdown form directly and keeps its previews owner-only', async () => {
     const { bot, apiCall, membershipCheck } = setupBot();
     await bot.handleUpdate(callbackUpdate(73, 'feature:plan-countdown'));

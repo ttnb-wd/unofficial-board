@@ -343,3 +343,30 @@ button[aria-pressed="true"] { border-color: var(--feature-heading); }
   font-size: 17px;
 }
 .countdown-list-card .countdown-tile { padding-block: 6px; }
+
+/* One Tap Hangout */
+.hangout-field { margin-bottom: 12px; }
+.hangout-date { display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr); gap: 8px; }
+.hangout-date input { padding-inline: 6px; }
+#hangout-today { margin-top: 6px; }
+#hangout-description { resize: vertical; }
+.hangout-content { display: grid; gap: 10px; }
+.hangout-card { margin: 0; }
+.hangout-card h2, .hangout-card p, .hangout-card ul { margin: 0 0 8px; }
+.hangout-card h3 { margin: 12px 0 2px; color: var(--feature-heading); font-size: 15px; }
+.hangout-card ul { padding-inline-start: 22px; }
+.hangout-description { white-space: pre-wrap; }
+.hangout-state, .hangout-my-rsvp { color: var(--feature-heading); font-weight: 650; }
+.hangout-counters, .hangout-rsvp {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+  margin-block: 10px;
+}
+.hangout-counter { display: grid; text-align: center; background: var(--feature-tint); border-radius: var(--radius-control); padding: 6px 1px; }
+.hangout-counter strong { color: var(--feature-heading); font-size: 19px; font-variant-numeric: tabular-nums; }
+.hangout-counter span, .hangout-rsvp button { font-size: 13px; }
+.hangout-rsvp button { padding-inline: 2px; }
+.hangout-list-title { background: transparent; color: var(--feature-heading); padding-inline: 0; text-align: left; }
+.hangout-pager { justify-content: space-between; align-items: center; }
+.hangout-preview-link { width: 100%; }

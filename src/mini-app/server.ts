@@ -17,6 +17,9 @@ import { deliverBirthdays } from '../features/birthday-reminder/delivery.js';
 import { BillError, maxProofBytes } from '../features/bill-splitter/rules.js';
 import { handleCountdownAction } from '../features/plan-countdown/api.js';
 import { deliverCountdowns } from '../features/plan-countdown/delivery.js';
+import { handleHangoutAction } from '../features/one-tap-hangout/api.js';
+import { deliverHangouts } from '../features/one-tap-hangout/delivery.js';
+import { displayName } from '../features/one-tap-hangout/rules.js';
 import { validateTelegramInitData } from './init-data.js';
 import {
   budgetVoteSubmissionSchema,
@@ -31,6 +34,7 @@ const MAX_BODY_BYTES = 16_384;
 
 type RequestIdentity = {
   userId: bigint;
+  name: string;
 };
 
 type SavedSubmission = {
@@ -142,7 +146,7 @@ async function authorizeRequest(
       config.prelaunchOwnerId,
       user.id,
     )
-      ? { userId: user.id }
+      ? { userId: user.id, name: displayName(user) }
       : null;
   }
 
@@ -152,7 +156,7 @@ async function authorizeRequest(
     config.groupId,
     user.id,
   );
-  return isMember ? { userId: user.id } : null;
+  return isMember ? { userId: user.id, name: displayName(user) } : null;
 }
 
 async function createSubmission(
@@ -488,13 +492,15 @@ async function saveBudgetVote(
 
 async function serveAsset(
   response: ServerResponse,
-  fileName: 'index.html' | 'app.css' | 'app.js' | 'config.js' | 'bills.html' | 'bills.js' | 'birthday.html' | 'birthday.js' | 'countdown.html' | 'countdown.js' | 'countdown-clock.js',
+  fileName: 'index.html' | 'app.css' | 'app.js' | 'config.js' | 'bills.html' | 'bills.js' | 'birthday.html' | 'birthday.js' | 'countdown.html' | 'countdown.js' | 'countdown-clock.js' | 'hangout.html' | 'hangout.js',
 ): Promise<void> {
   const contentTypes = {
     'index.html': 'text/html; charset=utf-8',
     'bills.html': 'text/html; charset=utf-8',
     'bills.js': 'text/javascript; charset=utf-8',
     'birthday.html': 'text/html; charset=utf-8',
+    'hangout.html': 'text/html; charset=utf-8',
+    'hangout.js': 'text/javascript; charset=utf-8',
     'countdown.html': 'text/html; charset=utf-8',
     'countdown.js': 'text/javascript; charset=utf-8',
     'countdown-clock.js': 'text/javascript; charset=utf-8',
@@ -536,6 +542,7 @@ export function createMiniAppServer(
   botUsername?: string,
 ): {
   listen: () => Promise<void>;
+  wakeHangouts: () => void;
   close: () => Promise<void>;
 } {
   const frontendOrigin = config.miniAppUrl ? new URL(config.miniAppUrl).origin : undefined;
@@ -544,7 +551,14 @@ export function createMiniAppServer(
   let pendingBirthdayDelivery: Promise<void> | undefined;
   let birthdayTimer: NodeJS.Timeout | undefined;
   let pendingCountdownDelivery: Promise<void> | undefined;
+  let pendingHangoutDelivery: Promise<void> | undefined;
   let closing = false;
+  const wakeHangouts = () => {
+    if (closing || pendingHangoutDelivery || !botUsername || config.accessMode !== 'LIVE') return;
+    pendingHangoutDelivery = deliverHangouts(database, telegram, config, botUsername)
+      .catch((error: unknown) => logger.warn({ errorName: errorName(error) }, 'Hangout delivery worker failed'))
+      .finally(() => { pendingHangoutDelivery = undefined; });
+  };
   const kickCountdowns = () => {
     if (closing || pendingCountdownDelivery || !botUsername || config.accessMode !== 'LIVE') return;
     pendingCountdownDelivery = deliverCountdowns(database, telegram, config, botUsername)
@@ -571,12 +585,13 @@ export function createMiniAppServer(
       const isBill = url.pathname === '/api/bills';
       const isBirthday = url.pathname === '/api/birthdays';
       const isCountdown = url.pathname === '/api/countdowns';
+      const isHangout = url.pathname === '/api/hangouts';
       const isHealth = url.pathname === '/healthz';
-      if ((feature || isBill || isBirthday || isCountdown || isHealth) && !allowApiOrigin(request, response, frontendOrigin)) {
+      if ((feature || isBill || isBirthday || isCountdown || isHangout || isHealth) && !allowApiOrigin(request, response, frontendOrigin)) {
         sendJson(response, 403, { error: 'Origin is not allowed.' });
         return;
       }
-      if (request.method === 'OPTIONS' && (feature || isBill || isBirthday || isCountdown)) {
+      if (request.method === 'OPTIONS' && (feature || isBill || isBirthday || isCountdown || isHangout)) {
         if (request.headers['access-control-request-method'] !== 'POST') {
           sendJson(response, 405, { error: 'Method is not allowed.' });
           return;
@@ -592,6 +607,7 @@ export function createMiniAppServer(
       }
       if (request.method === 'GET' && isHealth) {
         kickCountdowns();
+        wakeHangouts();
         sendJson(response, 200, { status: 'ok' });
         return;
       }
@@ -605,6 +621,12 @@ export function createMiniAppServer(
             return;
           case '/mini-app/bills.js':
             await serveAsset(response, 'bills.js');
+            return;
+          case '/mini-app/hangout':
+            await serveAsset(response, 'hangout.html');
+            return;
+          case '/mini-app/hangout.js':
+            await serveAsset(response, 'hangout.js');
             return;
           case '/mini-app/countdown':
             await serveAsset(response, 'countdown.html');
@@ -631,6 +653,34 @@ export function createMiniAppServer(
             await serveAsset(response, 'config.js');
             return;
         }
+      }
+      if (request.method === 'POST' && isHangout) {
+        const receivedAt = new Date();
+        const identity = await authorizeRequest(request, config, database, telegram);
+        if (!identity) {
+          sendJson(response, 403, { error: 'Access could not be verified. Reopen One Tap Hangout from the private bot chat.' });
+          return;
+        }
+        if (request.headers['content-type']?.split(';')[0] !== 'application/json') {
+          sendJson(response, 415, { error: 'JSON is required.' });
+          return;
+        }
+        let body: unknown;
+        try {
+          body = await readJsonBody(request);
+        } catch (error) {
+          sendJson(response, error instanceof RangeError ? 413 : 400, { error: 'The request could not be read.' });
+          return;
+        }
+        const result = await handleHangoutAction(body, { id: identity.userId, name: identity.name, receivedAt }, config, database);
+        sendJson(response, result.status, {
+          ...result.body,
+          ...(result.status === 200 && botUsername && /^[a-zA-Z0-9_]+$/.test(botUsername)
+            ? { dashboardUrl: `https://t.me/${botUsername}?start=dashboard` }
+            : {}),
+        });
+        if ('wake' in result && result.wake) wakeHangouts();
+        return;
       }
       if (request.method === 'POST' && isCountdown) {
         const identity = await authorizeRequest(request, config, database, telegram);
@@ -732,6 +782,7 @@ export function createMiniAppServer(
   });
 
   return {
+    wakeHangouts,
     listen: () =>
       new Promise((resolveListen, rejectListen) => {
         server.once('error', rejectListen);
@@ -740,7 +791,11 @@ export function createMiniAppServer(
           closing = false;
           if (botUsername && config.accessMode === 'LIVE') {
             kick();
-            deliveryTimer = setInterval(kick, 15_000);
+            wakeHangouts();
+            deliveryTimer = setInterval(() => {
+              kick();
+              wakeHangouts();
+            }, 15_000);
             deliveryTimer.unref();
           }
           if (config.accessMode === 'LIVE') {
@@ -775,6 +830,7 @@ export function createMiniAppServer(
       await pendingDelivery;
       await pendingBirthdayDelivery;
       await pendingCountdownDelivery;
+      await pendingHangoutDelivery;
     },
   };
 }

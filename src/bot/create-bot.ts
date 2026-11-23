@@ -12,6 +12,7 @@ import type { createLogger } from '../logger.js';
 import { registerBirthdayMenu } from '../features/birthday-reminder/bot.js';
 import { registerBillMenus } from '../features/bill-splitter/bot.js';
 import { countdownKeyboard, registerCountdownMenu } from '../features/plan-countdown/bot.js';
+import { hangoutKeyboard, registerHangoutMenu } from '../features/one-tap-hangout/bot.js';
 import { registerVoting } from './voting.js';
 import {
   dashboardKeyboard,
@@ -24,7 +25,7 @@ function errorName(error: unknown): string {
 }
 
 function dashboardText(): string {
-  return `The Unofficial Board\n\nChoose a feature to get started. Smart Poll, Group Budget Vote, Bill Splitter, Birthday Reminder, and Plan Countdown are available.\n\n${features.map((feature) => `• ${feature.title}`).join('\n')}`;
+  return `The Unofficial Board\n\nChoose a feature to get started. Smart Poll, Group Budget Vote, Bill Splitter, Birthday Reminder, Plan Countdown, and One Tap Hangout are available.\n\n${features.map((feature) => `• ${feature.title}`).join('\n')}`;
 }
 
 export function createBot(
@@ -32,6 +33,7 @@ export function createBot(
   database: PrismaClient,
   botUsername: string,
   logger: ReturnType<typeof createLogger>,
+  wakeHangouts = () => {},
 ): Telegraf {
   const bot = new Telegraf(config.botToken);
   const authorize = (ctx: Context, allowGroupChat = false) =>
@@ -107,6 +109,7 @@ export function createBot(
   registerBillMenus(bot, config, authorize);
   registerBirthdayMenu(bot, config, database, authorize);
   registerCountdownMenu(bot, config, authorize);
+  registerHangoutMenu(bot, config, database, authorize, wakeHangouts);
   registerVoting(bot, config, database, botUsername, authorize);
 
   bot.start(async (ctx) => {
@@ -121,6 +124,12 @@ export function createBot(
     }
     if (access === 'unavailable') {
       await ctx.reply('I could not verify your group access. Please try again later.');
+      return;
+    }
+
+    const hangoutId = /^hangout_([A-Za-z0-9_-]{1,48})$/.exec(ctx.startPayload)?.[1];
+    if (hangoutId && config.accessMode === 'LIVE') {
+      await ctx.reply('Hangout Details', hangoutKeyboard(config, hangoutId));
       return;
     }
 

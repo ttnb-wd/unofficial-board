@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en" data-feature="one-tap-hangout">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
+  <title>One Tap Hangout · The Unofficial Board</title>
+  <link rel="stylesheet" href="/mini-app/app.css">
+  <script defer src="https://telegram.org/js/telegram-web-app.js"></script>
+  <script defer src="/mini-app/config.js"></script>
+  <script type="module" src="/mini-app/hangout.js"></script>
+</head>
+<body>
+  <main class="shell">
+    <header class="feature-hero">
+      <p class="bill-badge" id="hangout-preview" hidden>PRELAUNCH · Simulation</p>
+      <h1 id="hangout-heading">One Tap Hangout</h1>
+    </header>
+    <p id="hangout-error" class="error" role="alert" hidden></p>
+    <p id="hangout-loading" class="bill-card" role="status">Opening One Tap Hangout…</p>
+    <form id="hangout-form" hidden>
+      <div class="hangout-field">
+        <label for="hangout-title">Hangout title</label>
+        <input name="title" id="hangout-title" required maxlength="80">
+      </div>
+      <fieldset class="hangout-field">
+        <legend>Event time · Asia/Yangon</legend>
+        <div class="hangout-date">
+          <div>
+            <label for="hangout-date">Date</label>
+            <input name="date" id="hangout-date" type="date" min="1000-01-01" max="9999-12-31" required>
+          </div>
+          <div>
+            <label for="hangout-time">Time</label>
+            <input name="time" id="hangout-time" type="time" required>
+          </div>
+        </div>
+        <button id="hangout-today" type="button">Today</button>
+      </fieldset>
+      <div class="hangout-field">
+        <label for="hangout-place">Place <span class="bill-muted">(optional)</span></label>
+        <input name="place" id="hangout-place" maxlength="120">
+      </div>
+      <div class="hangout-field">
+        <label for="hangout-description">Description <span class="bill-muted">(optional)</span></label>
+        <textarea name="description" id="hangout-description" maxlength="240" rows="2"></textarea>
+      </div>
+      <button class="primary-button" id="hangout-save" type="submit">Create Hangout</button>
+    </form>
+    <section id="hangout-content" class="hangout-content" hidden></section>
+    <nav id="hangout-navigation" class="bill-actions" aria-label="Navigation" hidden>
+      <button id="hangout-back" type="button">Back</button>
+      <button id="hangout-main-menu" type="button">Main Menu</button>
+    </nav>
+  </main>
+</body>
+</html>

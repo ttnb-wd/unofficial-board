@@ -58,6 +58,36 @@ describe('Mini App API', () => {
     vi.restoreAllMocks();
   });
 
+  it('keeps Hangout simulation owner-only and performs no Telegram or database operations', async () => {
+    const port = await getFreePort();
+    const use = vi.fn(() => { throw new Error('PRELAUNCH Hangout accessed external state'); });
+    const denied = new Proxy({}, { get: use });
+    const server = createMiniAppServer(
+      { ...config, miniAppPort: port },
+      denied as PrismaClient, denied as Telegram, createLogger('silent'), 'test_bot',
+    );
+    await server.listen();
+    const post = (userId: number, action: string) => fetch(`http://127.0.0.1:${port}/api/hangouts`, {
+      method: 'POST',
+      headers: { Authorization: 'tma ' + signedInitData(userId), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action }),
+    });
+    try {
+      const page = await fetch(`http://127.0.0.1:${port}/mini-app/hangout`);
+      expect(page.status).toBe(200);
+      expect(await page.text()).toContain('data-feature="one-tap-hangout"');
+      expect((await post(73, 'session')).status).toBe(403);
+      const owner = await post(42, 'session');
+      expect(owner.status).toBe(200);
+      expect(await owner.json()).toMatchObject({ preview: true });
+      expect((await post(42, 'active')).status).toBe(403);
+      server.wakeHangouts();
+      expect(use).not.toHaveBeenCalled();
+    } finally {
+      await server.close();
+    }
+  });
+
   it('authenticates the countdown owner and isolates PRELAUNCH reads and writes from the database', async () => {
     const port = await getFreePort();
     const lookup = vi.fn();
@@ -186,7 +216,7 @@ describe('Mini App API', () => {
     });
 
     try {
-      for (const path of ['/api/smart-polls', '/api/budget-votes', '/api/countdowns']) {
+      for (const path of ['/api/smart-polls', '/api/budget-votes', '/api/countdowns', '/api/hangouts']) {
         const allowed = await preflight(path, productionOrigin);
         expect(allowed.status).toBe(204);
         expect(allowed.headers.get('access-control-allow-origin')).toBe(productionOrigin);

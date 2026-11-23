@@ -29,6 +29,7 @@ describe('Telegram Mini App initData validation', () => {
   it('accepts a current Telegram signature and extracts only the user ID', () => {
     expect(validateTelegramInitData(signedInitData(42), BOT_TOKEN, NOW)).toEqual({
       id: 42n,
+      first_name: 'Owner',
     });
   });
 
