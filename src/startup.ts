@@ -5,8 +5,10 @@ import { verifyAndRecordMembership } from './access/membership.js';
 import { allowsGroupWorkflows, groupDestination } from './access/policy.js';
 import type { AppConfig } from './config.js';
 
+type ScopeReason = 'existing-group-unmarked' | 'legacy-rows-without-group' | 'reservation-conflict';
+
 export class StartupError extends Error {
-  constructor(readonly code: string) {
+  constructor(readonly code: string, readonly scopeReason?: ScopeReason) {
     super(code);
     this.name = 'StartupError';
   }
@@ -48,7 +50,7 @@ export async function verifyDatabaseScope(db: PrismaClient, config: AppConfig) {
   const groupId = config.groupId;
   const existing = await db.telegramGroup.findUnique({ where: { telegramId: groupId }, select: { testOnly: true } });
   if (existing) {
-    if (!existing.testOnly) throw new StartupError('TEST_GROUP_SCOPE_ALREADY_IN_USE');
+    if (!existing.testOnly) throw new StartupError('TEST_GROUP_SCOPE_ALREADY_IN_USE', 'existing-group-unmarked');
     return;
   }
   const legacy = await Promise.all([
@@ -56,7 +58,7 @@ export async function verifyDatabaseScope(db: PrismaClient, config: AppConfig) {
     db.birthdayDelivery.findFirst({ where: { groupId }, select: { groupId: true } }),
     db.planCountdown.findFirst({ where: { groupId }, select: { groupId: true } }),
   ]);
-  if (legacy.some(Boolean)) throw new StartupError('TEST_GROUP_SCOPE_ALREADY_IN_USE');
+  if (legacy.some(Boolean)) throw new StartupError('TEST_GROUP_SCOPE_ALREADY_IN_USE', 'legacy-rows-without-group');
 }
 
 export async function registerTestScope(db: PrismaClient, telegram: Telegram, config: AppConfig) {
@@ -66,7 +68,7 @@ export async function registerTestScope(db: PrismaClient, telegram: Telegram, co
     where: { telegramId: config.groupId }, create: { telegramId: config.groupId, testOnly: true }, update: {},
     select: { testOnly: true },
   });
-  if (!group.testOnly) throw new StartupError('TEST_GROUP_SCOPE_ALREADY_IN_USE');
+  if (!group.testOnly) throw new StartupError('TEST_GROUP_SCOPE_ALREADY_IN_USE', 'reservation-conflict');
   await db.member.upsert({ where: { telegramId: config.prelaunchOwnerId }, create: { telegramId: config.prelaunchOwnerId }, update: {} });
   await verifyAndRecordMembership(telegram, db, config.groupId, config.prelaunchOwnerId, true);
 }

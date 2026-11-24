@@ -69,11 +69,60 @@ button continue to open the existing Vercel URL with `/mini-app`.
    startup log to show `testGroupEnabled=true`. In the test group, the owner
    sends `/test_group@unofficial_board_bot` and confirms the expected ID and
    PRELAUNCH mode. The first test startup reserves a new group scope. Startup
-   rejects the ID if existing non-test records already claim it.
+   rejects an unmarked existing group. For group `-5351770956`, complete
+   the reviewed recovery below before enabling the flag.
 5. In the private bot chat, the owner sends `/test_allow <numeric Telegram user ID>`
    for each invited tester who has already joined the test group. Each tester
    opens the private bot and sends `/start`. Use `/test_revoke <numeric Telegram user ID>`
    to turn off a tester's access.
+
+## Recover the reviewed legacy test group
+
+Commit `3b74847` stops at `database-scope / TEST_GROUP_SCOPE_ALREADY_IN_USE`
+when the configured test group already has a `TelegramGroup` row with
+`testOnly=false`. The check also rejects certain legacy rows without a
+`TelegramGroup` row. The read-only Neon inspection on 24 November 2026
+confirmed the first condition for this incident.
+
+| Reviewed group | Marker and records |
+| --- | --- |
+| Original `-5305465370` | `testOnly=false` |
+| Legacy test `-5351770956` | `testOnly=false`, created 24 November at 10:35:13.137 Yangon. One creator membership belonging to the configured owner, zero test-authorized participants, zero feature records or delivery jobs. |
+
+All 12 migrations were present. This recovery requires no schema migration.
+The legacy bot could create the group and membership simply by verifying
+access. Those rows are enough to trigger the guard.
+
+1. Keep Render in PRELAUNCH with `TEST_GROUP_ENABLED=false`. Check
+   `/healthz` and make sure the old local LIVE poller and any other process
+   writing to the test group have stopped.
+2. Confirm that `-5351770956` was used exclusively for testing and is still
+   the dedicated test chat with the existing bot as an administrator.
+3. From the reviewed checkout, connect to the **same Neon database Render
+   uses** through its direct endpoint. Substitute the host, role, and
+   database name. Enter the password at the prompt.
+
+   ```powershell
+   $env:PGSSLMODE = 'require'
+   psql -X -W -h <direct-neon-host> -U <role> -d <database> -v confirm_test_group_id=-5351770956 -f scripts/adopt-reviewed-test-group.sql
+   ```
+
+   The confirmation authorizes this one operation. The script locks and
+   checks the two known IDs, requires the audited test row's creation time
+   and owner-only membership, and rejects feature or delivery data that
+   appeared after review. It changes only `TelegramGroup.testOnly` for the
+   test group. Expect original `f` and test `t`. If any check fails, leave
+   the flag off and review the new state before proceeding. The script
+   can be retried after a lost connection to confirm a committed adoption.
+4. Set `TEST_GROUP_ENABLED=true` with the existing group IDs and restart.
+   Verify `/healthz`, run the owner-only `/test_group@unofficial_board_bot`,
+   then authorize each tester individually. Prior membership alone grants
+   no tester access. If startup still fails, use the startup phase and
+   code from the new logs.
+
+To pause testing after recovery, use the existing disable procedure.
+Leave the test-only marker in place so a future LIVE configuration
+cannot reuse this ID as the original group.
 
 ## Scope and delivery
 
@@ -113,7 +162,7 @@ the service to wake. [Render Free web service limitations](https://render.com/do
 | --- | --- |
 | `ENVIRONMENT_INVALID` | Missing or invalid variable names reported in the log |
 | `database-connect` | Existing runtime URL, TLS options, Neon endpoint and network reachability. Prisma `P1001` means the runtime could not reach the database server. |
-| `database-scope` | Migration status and the group identity. `P2022` can indicate a missing migration column. `ORIGINAL_GROUP_IS_TEST_ONLY` and `TEST_GROUP_SCOPE_ALREADY_IN_USE` indicate an ownership conflict. |
+| `database-scope` | Migration status and the group identity. `P2022` can indicate a missing migration column. `ORIGINAL_GROUP_IS_TEST_ONLY` and `TEST_GROUP_SCOPE_ALREADY_IN_USE` indicate an ownership conflict. Check the safe `scopeReason` field for the affected guard. |
 | `telegram-identity` | Existing bot token and Telegram API reachability. `TELEGRAM_401` indicates authorization failure. |
 | `telegram-group` | Exact group ID and bot membership. `TEST_GROUP_BOT_ADMIN_REQUIRED` means the test bot must be an administrator. |
 | `test-scope-registration` | Test scope reservation, database permissions, or owner membership lookup |

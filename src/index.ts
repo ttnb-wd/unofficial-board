@@ -5,7 +5,7 @@ import { EnvironmentValidationError, parseEnvironment } from './config.js';
 import { createDatabase } from './database.js';
 import { createLogger } from './logger.js';
 import { createMiniAppServer } from './mini-app/server.js';
-import { registerTestScope, startPolling, startupErrorCode, verifyDatabaseScope, verifyGroup } from './startup.js';
+import { registerTestScope, startPolling, StartupError, startupErrorCode, verifyDatabaseScope, verifyGroup } from './startup.js';
 
 async function main(): Promise<void> {
   const config = Object.freeze(parseEnvironment(process.env));
@@ -66,7 +66,11 @@ async function main(): Promise<void> {
     await polling.done;
   } catch (error) {
     if (!stopping) {
-      logger.fatal({ phase, code: startupErrorCode(error) }, 'Application failed');
+      logger.fatal({
+        phase,
+        code: startupErrorCode(error),
+        ...(error instanceof StartupError && error.scopeReason ? { scopeReason: error.scopeReason } : {}),
+      }, 'Application failed');
       process.exitCode = 1;
     }
     stopPolling('startup-failure');

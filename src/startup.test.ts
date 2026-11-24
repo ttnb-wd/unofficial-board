@@ -34,18 +34,39 @@ describe('startup safety', () => {
   it('blocks ambiguous legacy scope and rejects group calls outside the selected scope', async () => {
     const findUnique = vi.fn().mockResolvedValue({ testOnly: false });
     const db = { telegramGroup: { findUnique } } as unknown as PrismaClient;
-    await expect(verifyDatabaseScope(db, test)).rejects.toMatchObject({ code: 'TEST_GROUP_SCOPE_ALREADY_IN_USE' });
+    await expect(verifyDatabaseScope(db, test)).rejects.toMatchObject({
+      code: 'TEST_GROUP_SCOPE_ALREADY_IN_USE', scopeReason: 'existing-group-unmarked',
+    });
     const orphaned = {
       telegramGroup: { findUnique: vi.fn().mockResolvedValue(null) },
       birthday: { findFirst: vi.fn().mockResolvedValue({ groupId: -20n }) },
       birthdayDelivery: { findFirst: vi.fn().mockResolvedValue(null) },
       planCountdown: { findFirst: vi.fn().mockResolvedValue(null) },
     } as unknown as PrismaClient;
-    await expect(verifyDatabaseScope(orphaned, test)).rejects.toMatchObject({ code: 'TEST_GROUP_SCOPE_ALREADY_IN_USE' });
+    await expect(verifyDatabaseScope(orphaned, test)).rejects.toMatchObject({
+      code: 'TEST_GROUP_SCOPE_ALREADY_IN_USE', scopeReason: 'legacy-rows-without-group',
+    });
     expect(groupDestination(test, -20n)).toBe('-20');
     expect(() => groupDestination(test, -10n)).toThrow();
     expect(() => groupDestination({ ...test, groupId: -10n }, -10n)).toThrow();
     expect(() => groupDestination(base, -10n)).toThrow();
+  });
+
+  it('checks only the original group when disabled and accepts a marked test scope when enabled', async () => {
+    const findUnique = vi.fn().mockResolvedValueOnce({ testOnly: false });
+    const db = { telegramGroup: { findUnique } } as unknown as PrismaClient;
+    await expect(verifyDatabaseScope(db, base)).resolves.toBeUndefined();
+    expect(findUnique).toHaveBeenCalledExactlyOnceWith({
+      where: { telegramId: base.groupId }, select: { testOnly: true },
+    });
+
+    findUnique.mockResolvedValueOnce({ testOnly: false }).mockResolvedValueOnce({ testOnly: true });
+    await expect(verifyDatabaseScope(db, test)).resolves.toBeUndefined();
+
+    findUnique.mockResolvedValueOnce({ testOnly: true });
+    await expect(verifyDatabaseScope(db, { ...base, groupId: test.groupId })).rejects.toMatchObject({
+      code: 'ORIGINAL_GROUP_IS_TEST_ONLY',
+    });
   });
 
   it('waits for the first poll and reports a masked conflict by phase and code', async () => {
