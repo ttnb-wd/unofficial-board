@@ -1,7 +1,7 @@
 (() => {
   const params = new URLSearchParams(location.search);
   const feature = params.get('feature');
-  if (!['poll', 'budget'].includes(feature) || params.get('view') !== 'votes') return;
+  if (!['poll', 'budget'].includes(feature) || !['votes', 'mine'].includes(params.get('view'))) return;
   const ui = window.BoardUI;
   const { element, icon } = ui;
   const telegram = window.Telegram?.WebApp;
@@ -13,7 +13,9 @@
   const error = document.querySelector('#launch-error');
   const id = params.get('id');
   const page = Math.min(9999, Math.max(0, Number.parseInt(params.get('page'), 10) || 0));
-  const browse = `?feature=${feature}&view=votes`;
+  const mine = params.get('view') === 'mine';
+  const mineLabel = feature === 'poll' ? 'My Polls' : 'My Budget Votes';
+  const browse = `?feature=${feature}&view=${mine ? 'mine' : 'votes'}`;
   const overview = feature === 'poll' ? 'Smart Poll' : 'Group Budget Vote';
   const destination = (path) => ui.returnTab ? ui.featureUrl(path, ui.returnTab) : '/mini-app' + path;
   let busy = false;
@@ -64,20 +66,26 @@
     title.before(element('p', 'bill-badge', 'PRELAUNCH · Simulation'));
   }
 
-  function showList({ records, preview, more, managementUrl }) {
+  function statusLabel(status) {
+    return ({ OPEN: 'Open', CLOSED: 'Closed', DRAFT: 'Saved · Unpublished',
+      PUBLISHING: 'Delivery unconfirmed', CANCELLED: 'Cancelled' })[status] ?? status;
+  }
+
+  function showList({ records, preview, more }) {
     showPreview(preview);
-    intro.textContent = preview ? 'Try a saved ballot in the owner preview.' : 'Open a published ballot to vote or see the results.';
+    intro.textContent = preview ? 'Try a saved ballot in the owner preview.'
+      : mine ? 'Open a saved ballot to see its publication status.' : 'Open a published ballot to vote or see the results.';
     const actions = element('section', 'dashboard-card');
-    actions.append(element('h2', '', preview ? 'Preview ballots' : 'Published ballots'));
+    actions.append(element('h2', '', preview ? 'Preview ballots' : mine ? mineLabel : 'Published ballots'));
     for (const record of records) {
       const row = element('a', 'dashboard-row');
       row.href = destination(`${listPath(page)}&id=${encodeURIComponent(record.id)}`);
       row.append(icon(feature), element('strong', 'row-copy', record.title),
-        element('span', 'status-chip', preview ? 'Preview' : record.status === 'OPEN' ? 'Open' : 'Closed'),
+        element('span', 'status-chip', preview ? 'Preview' : statusLabel(record.status)),
         icon('next', 'disclosure'));
       actions.append(row);
     }
-    if (!records.length) actions.append(element('p', 'dashboard-note', preview ? 'Create a ballot to preview it here.' : 'No published ballots on this page.'));
+    if (!records.length) actions.append(element('p', 'dashboard-note', preview ? 'Create a ballot to preview it here.' : mine ? 'No saved ballots on this page.' : 'No published ballots on this page.'));
     if (page > 0 || more) {
       const pages = element('div', 'bill-actions vote-pages');
       if (page > 0) pages.append(link('Previous', listPath(page - 1)));
@@ -85,16 +93,46 @@
       actions.append(pages);
     }
     const create = link(feature === 'poll' ? 'Create a Poll' : 'Create Budget Vote',
-      `?feature=${feature}${ui.returnTab ? '' : '&from=votes'}`);
+      `?feature=${feature}${ui.returnTab ? '' : `&from=${mine ? 'mine' : 'votes'}`}`);
     const controls = element('div', 'bill-actions');
     controls.append(create);
-    if (managementUrl) {
-      const management = element('a', 'secondary-button', feature === 'poll' ? 'Manage My Polls' : 'Manage My Budget Votes');
-      management.href = managementUrl;
-      management.addEventListener('click', ui.openBot);
-      controls.append(management);
-    }
+    controls.append(link(mine ? 'Voting and results' : mineLabel,
+      `?feature=${feature}&view=${mine ? 'votes' : 'mine'}`));
     root.replaceChildren(controls, actions);
+  }
+
+  function showSaved(data) {
+    title.textContent = data.title;
+    intro.textContent = statusLabel(data.status);
+    const card = element('section', 'dashboard-card');
+    card.append(element('h2', '', 'Options'));
+    for (const choice of data.choices) card.append(element('p', 'dashboard-row', choice.label));
+    if (data.status === 'PUBLISHING') {
+      card.append(element('p', 'dashboard-note',
+        'Telegram may have received the announcement. Check the group and refresh this page. Resending is disabled to prevent a duplicate.'));
+    }
+    const controls = element('div', 'bill-actions');
+    if (data.canPublish) {
+      const publish = button('Publish to group', async () => {
+        if (busy) return;
+        busy = publish.disabled = true;
+        notice();
+        try {
+          const outcome = await request({ action: 'publish', id });
+          busy = false;
+          await load(outcome.publication === 'published');
+          if (outcome.publication !== 'published') notice(outcome.message);
+        } catch (failure) {
+          notice(failure.message);
+        } finally {
+          busy = publish.disabled = false;
+        }
+      }, 'primary-button');
+      controls.append(publish);
+    }
+    controls.append(button('Refresh status', () => void load(), 'secondary-button'));
+    controls.append(link(mineLabel, listPath(page)));
+    root.replaceChildren(card, controls);
   }
 
   function resultCard(data, hidden) {
@@ -204,15 +242,20 @@
     loading.setAttribute('role', 'status');
     root.replaceChildren(loading);
     try {
-      if (id) showBallot(await request({ action: 'detail', id }), false, showResults);
-      else showList(await request({ action: 'list', page }));
+      if (id) {
+        const data = await request({ action: 'detail', id, ...(mine ? { mine } : {}) });
+        if (data.status) showSaved(data);
+        else showBallot(data, false, showResults);
+      } else {
+        showList(await request({ action: 'list', page, ...(mine ? { mine } : {}) }));
+      }
     } catch (error) {
       notice(error.message);
       root.replaceChildren(button('Try again', load));
     }
   }
 
-  title.textContent = overview;
+  title.textContent = mine ? mineLabel : overview;
   hero.hidden = root.hidden = false;
   ui.onFeatureBack = goBack;
   telegram?.ready();

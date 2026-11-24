@@ -11,6 +11,7 @@ import type { AppConfig } from '../config.js';
 import { canAccessBoard } from '../access/membership.js';
 import type { createLogger } from '../logger.js';
 import { handleBillAction } from '../features/bill-splitter/api.js';
+import { publicationMessage, publishVote } from '../features/vote-publication.js';
 import { refreshGroupMessages } from '../features/group-message.js';
 import { deliverBills } from '../features/bill-splitter/delivery.js';
 import { handleBirthdayAction } from '../features/birthday-reminder/api.js';
@@ -155,6 +156,7 @@ async function createSubmission(
   telegram: Telegram,
   logger: ReturnType<typeof createLogger>,
   feature: 'poll' | 'budget',
+  botUsername?: string,
 ): Promise<void> {
   const identity = await authorizeRequest(request, config, database, telegram);
   if (!identity) {
@@ -180,6 +182,20 @@ async function createSubmission(
     return;
   }
 
+  const userId = identity.userId;
+  async function publishSaved(saved: SavedSubmission) {
+    try {
+      if (!botUsername) throw new Error('Telegram identity unavailable');
+      const publication = await publishVote(database, telegram, config, botUsername,
+        feature === 'poll' ? 'poll' : 'bv', saved.id, userId);
+      return { publication, message: publicationMessage(publication) };
+    } catch (error) {
+      logger.error({ errorName: errorName(error), ...prismaErrorMetadata(error), operation: 'mini-app-publish-vote' },
+        'Could not confirm publication of a saved ballot');
+      return { publication: 'unconfirmed', message: publicationMessage('unconfirmed') };
+    }
+  }
+
   if (feature === 'poll') {
     const parsed = smartPollSubmissionSchema.safeParse(body);
     if (!parsed.success) {
@@ -191,11 +207,10 @@ async function createSubmission(
       sendJson(response, saved.created ? 201 : 200, {
         id: saved.id,
         created: saved.created,
-        status:
-          isOwnerPreview(config)
-            ? 'PRELAUNCH_PREVIEW'
-            : 'DRAFT',
-        message: 'Poll saved privately. Open My polls in the bot.',
+        ...(parsed.data.publish && allowsGroupWorkflows(config) ? await publishSaved(saved) : {
+          status: isOwnerPreview(config) ? 'PRELAUNCH_PREVIEW' : 'DRAFT',
+          message: 'Poll saved privately.',
+        }),
       });
     } catch (error) {
       if (error instanceof SubmissionConflictError) {
@@ -237,11 +252,10 @@ async function createSubmission(
     sendJson(response, saved.created ? 201 : 200, {
       id: saved.id,
       created: saved.created,
-      status:
-        isOwnerPreview(config)
-          ? 'PRELAUNCH_OPEN'
-          : 'DRAFT',
-      message: 'Budget vote saved privately. Open My budget votes in the bot.',
+      ...(parsed.data.publish && allowsGroupWorkflows(config) ? await publishSaved(saved) : {
+        status: isOwnerPreview(config) ? 'PRELAUNCH_OPEN' : 'DRAFT',
+        message: 'Budget vote saved privately.',
+      }),
     });
   } catch (error) {
     if (error instanceof SubmissionConflictError) {
@@ -654,7 +668,7 @@ export function createMiniAppServer(
           sendJson(response, error instanceof RangeError ? 413 : 400, { error: 'The request could not be read.' });
           return;
         }
-        const result = await handleVoteAction(body, actor.userId, config, database, botUsername);
+        const result = await handleVoteAction(body, actor.userId, config, database, botUsername, telegram);
         if (result.status === 200 && typeof body === 'object' && body && 'action' in body && body.action === 'submit') kick();
         sendJson(response, result.status, result.body);
         return;
@@ -769,7 +783,7 @@ export function createMiniAppServer(
         return;
       }
       if (request.method === 'POST' && feature) {
-        await createSubmission(request, response, config, database, telegram, logger, feature);
+        await createSubmission(request, response, config, database, telegram, logger, feature, botUsername);
         return;
       }
       sendJson(response, 404, { error: 'Not found.' });

@@ -1,5 +1,5 @@
-import { allowsGroupWorkflows, groupDestination, isOwnerPreview } from '../access/policy.js';
-import { Markup, TelegramError } from 'telegraf';
+import { allowsGroupWorkflows, isOwnerPreview } from '../access/policy.js';
+import { Markup } from 'telegraf';
 import type { Context, Telegraf } from 'telegraf';
 import type { PrismaClient } from '@prisma/client';
 import { voteMessage } from '../features/group-message.js';
@@ -7,6 +7,7 @@ import type { AppConfig } from '../config.js';
 import { navigationRow, showScreen } from './navigation.js';
 
 import { canViewPublished, loadVote, publishedVotes, saveBallot, validSelection } from '../features/vote-store.js';
+import { publicationMessage, publishVote } from '../features/vote-publication.js';
 import type { Choice, Kind, VoteRecord } from '../features/vote-store.js';
 
 type View = 'mine' | 'group' | 'samples';
@@ -172,37 +173,13 @@ export function registerVoting(
     ]));
   }
 
-  async function transition(kind: Kind, record: VoteRecord, action: 'publish' | 'open' | 'restore' | 'close', messageId?: number) {
-    const states = {
-      publish: ['DRAFT', 'PUBLISHING'],
-      open: ['PUBLISHING', 'OPEN'],
-      restore: ['PUBLISHING', 'DRAFT'],
-      close: ['OPEN', 'CLOSED'],
-    } as const;
-    const [from, to] = states[action];
+  async function closeVote(kind: Kind, record: VoteRecord) {
     const where = { id: record.id, groupId: config.groupId, creatorId: record.creatorId,
-      status: from, isPrelaunchTest: false, ...(action === 'publish' ? { draftStep: 'SAVED' as const } : {}) };
-    const data = { status: to, ...(action === 'close' ? { groupSyncAt: new Date() } : {}), ...(messageId === undefined ? {} : { telegramMessageId: messageId }), ...(action === 'close' ? { closedAt: new Date() } : {}) };
+      status: 'OPEN' as const, isPrelaunchTest: false };
+    const now = new Date();
+    const data = { status: 'CLOSED' as const, groupSyncAt: now, closedAt: now };
     return kind === 'poll' ? database.smartPoll.updateMany({ where, data })
       : database.budgetVote.updateMany({ where, data });
-  }
-
-  async function publish(ctx: Context, kind: Kind, record: VoteRecord) {
-    if ((await transition(kind, record, 'publish')).count !== 1) return false;
-    let sent;
-    try {
-      const { text, ...extra } = voteMessage(kind, record, botUsername);
-      type Signal = NonNullable<NonNullable<Parameters<typeof ctx.telegram.callApi>[2]>['signal']>;
-      sent = await ctx.telegram.callApi('sendMessage', { chat_id: groupDestination(config, record.groupId), text, ...extra },
-        { signal: AbortSignal.timeout(10_000) as unknown as Signal });
-    } catch (error) {
-      // A definite Telegram rejection permits a retry. A transport failure can have delivered the message.
-      if (error instanceof TelegramError && error.code >= 400 && error.code < 500) {
-        await transition(kind, record, 'restore');
-      }
-      throw error;
-    }
-    return (await transition(kind, record, 'open', sent.message_id)).count === 1;
   }
 
   bot.action(/^gv:(poll|bv):([a-z0-9]{1,30}):([0-9])$/, async (ctx) => {
@@ -277,15 +254,14 @@ export function registerVoting(
         await ctx.answerCbQuery('This action is unavailable.');
         return;
       }
-      let changed: boolean;
       try {
-        changed = action === 'p' ? await publish(ctx, kind, record)
-          : (await transition(kind, record, 'close')).count === 1;
+        notice = action === 'p'
+          ? publicationMessage(await publishVote(database, ctx.telegram, config, botUsername, kind, id, record.creatorId))
+          : (await closeVote(kind, record)).count === 1 ? 'Voting closed.' : 'This action is no longer available.';
       } catch (error) {
         await ctx.answerCbQuery('Could not confirm the action. Reopen the detail to check its status.', { show_alert: true });
         throw error;
       }
-      notice = changed ? (action === 'p' ? 'Published.' : 'Voting closed.') : 'This action is no longer available.';
       record = await load(kind, id) ?? record;
     } else if (action === 'o' || action === 's' || mask > 0) {
       if (mode === 'owner' || !validSelection(record, mask, action === 's') ||

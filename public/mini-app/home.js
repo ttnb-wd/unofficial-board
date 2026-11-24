@@ -160,7 +160,8 @@
       link('My birthday', 'birthday-reminder', '/birthday', 'mine', birthdayLabel),
       link('My countdowns', 'plan-countdown', '/countdown?view=mine', 'mine'),
       link('My hangouts', 'one-tap-hangout', '/hangout?view=mine', 'mine'),
-      ...(bot ? [botLink('My polls and budget votes in Telegram')] : []),
+      link('My Polls', 'poll', '?feature=poll&view=mine', 'mine'),
+      link('My Budget Votes', 'budget', '?feature=budget&view=mine', 'mine'),
     ]));
     get('more-content').replaceChildren(group('The Board', [
       ...(bot ? [botLink('Open the Telegram bot')] : []),

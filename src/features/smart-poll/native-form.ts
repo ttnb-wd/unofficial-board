@@ -1,3 +1,4 @@
+import { publicationMessage, publishVote } from '../vote-publication.js';
 import { allowsGroupWorkflows, isOwnerPreview } from '../../access/policy.js';
 import type { PrismaClient } from '@prisma/client';
 import { Markup, Telegraf } from 'telegraf';
@@ -49,6 +50,7 @@ function previewKeyboard(
   pollId: string,
   options: { id: string }[],
   saved = false,
+  publish = false,
 ) {
   if (saved) {
     return Markup.inlineKeyboard([
@@ -66,7 +68,7 @@ function previewKeyboard(
       Markup.button.callback('Remove Option', `poll:remove-options:${pollId}`),
     ],
     [
-      Markup.button.callback('Done', `poll:done:${pollId}`),
+      Markup.button.callback(publish ? 'Create & Publish' : 'Done', `poll:done:${pollId}`),
       Markup.button.callback('Cancel', `poll:cancel:${pollId}`),
     ],
     [Markup.button.callback('Back', `poll:back:${pollId}`)],
@@ -194,12 +196,12 @@ async function showPollPreview(
       messageId,
       undefined,
       text,
-      previewKeyboard(poll.id, poll.options, saved),
+      previewKeyboard(poll.id, poll.options, saved, !isOwnerPreview(config)),
     );
   } else {
     const message = await ctx.reply(
       text,
-      previewKeyboard(poll.id, poll.options, saved),
+      previewKeyboard(poll.id, poll.options, saved, !isOwnerPreview(config)),
     );
     await database.smartPoll.updateMany({
       where: { groupId: config.groupId, id: poll.id, creatorId, status: poll.status },
@@ -549,7 +551,7 @@ export function registerNativeSmartPollFormHandlers(
     }
     await ctx.editMessageText(
       renderPreview(updated, updated.options),
-      previewKeyboard(pollId, updated.options),
+      previewKeyboard(pollId, updated.options, false, !isOwnerPreview(config)),
     );
   });
 
@@ -586,7 +588,7 @@ export function registerNativeSmartPollFormHandlers(
       if (updated) {
         await ctx.editMessageText(
           renderPreview(updated, updated.options),
-          previewKeyboard(updated.id, updated.options),
+          previewKeyboard(updated.id, updated.options, false, !isOwnerPreview(config)),
         );
       }
       return;
@@ -595,7 +597,7 @@ export function registerNativeSmartPollFormHandlers(
       await ctx.answerCbQuery();
       await ctx.editMessageText(
         renderPreview(poll, poll.options),
-        previewKeyboard(poll.id, poll.options, poll.draftStep === 'SAVED'),
+        previewKeyboard(poll.id, poll.options, poll.draftStep === 'SAVED', !isOwnerPreview(config)),
       );
       return;
     }
@@ -665,8 +667,8 @@ export function registerNativeSmartPollFormHandlers(
       });
       return;
     }
-    await ctx.answerCbQuery('Poll saved.');
     if (isOwnerPreview(config)) {
+      await ctx.answerCbQuery('Poll saved.');
       await ctx.editMessageText(
         `Saved privately. This poll has not been sent to the group.\n\n${renderPreview(poll, poll.options)}`,
         Markup.inlineKeyboard([
@@ -674,10 +676,14 @@ export function registerNativeSmartPollFormHandlers(
         ]),
       );
     } else {
+      const publication = await publishVote(database, ctx.telegram, config, ctx.botInfo.username,
+        'poll', poll.id, BigInt(ctx.from.id)).catch(() => 'unconfirmed' as const);
+      await ctx.answerCbQuery();
       await ctx.editMessageText(
-        `Poll saved.\n\n${renderPreview(poll, poll.options)}`,
+        `${publicationMessage(publication)}\n\n${renderPreview(poll, poll.options)}`,
         Markup.inlineKeyboard([
-          [Markup.button.callback('Publish to group', `poll:publish:${poll.id}`)],
+          ...(publication === 'retry' ? [[Markup.button.callback('Retry publishing', `poll:publish:${poll.id}`)]] : []),
+          [Markup.button.callback('My polls', 'poll:list')],
         ]),
       );
     }

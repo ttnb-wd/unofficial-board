@@ -6,12 +6,16 @@
   const params = new URLSearchParams(window.location.search);
   const feature = params.get('feature');
   const supported = feature === 'poll' || feature === 'budget';
-  if (feature === null || (supported && params.get('view') === 'votes')) return;
+  if (feature === null || (supported && ['votes', 'mine'].includes(params.get('view')))) return;
   const ui = window.BoardUI;
-  const fromVotes = supported && params.get('from') === 'votes';
+  const fromVotes = supported && ['votes', 'mine'].includes(params.get('from'));
   const votesPage = `?feature=${feature}&view=votes`;
+  const myPage = `?feature=${feature}&view=mine`;
+  const management = document.querySelector('#form-my-stuff');
+  const details = document.querySelector('#form-saved-ballot');
+  const resultError = document.querySelector('#publication-error');
   const leave = () => {
-    if (fromVotes) location.replace('/mini-app' + votesPage);
+    if (fromVotes) location.replace('/mini-app' + (params.get('from') === 'mine' ? myPage : votesPage));
     else if (!ui.backToBoard()) webApp?.close();
   };
   if (fromVotes) ui.onFeatureBack = leave;
@@ -33,7 +37,8 @@
   let pendingBody;
   let saveAttempted = false;
   let saved = false;
-  const saveLabel = isBudget ? 'Create Budget Vote' : 'Create Poll';
+  const saveLabel = 'Create & Publish';
+  const route = (path) => ui.returnTab ? ui.featureUrl(path, ui.returnTab) : '/mini-app' + path;
   function readyButton() {
     done.replaceChildren(ui.icon('send'), document.createTextNode(saveLabel));
   }
@@ -114,9 +119,9 @@
       addChoice();
       addChoice();
     }
-    const mine = document.querySelector('#form-my-stuff');
+    const mine = management;
     const mineLabel = isBudget ? 'My Budget Votes' : 'My Polls';
-    mine.href = ui.tabUrl('mine');
+    mine.href = route(myPage);
     mine.append(ui.icon('list'), document.createTextNode(mineLabel));
     mine.hidden = false;
     const votes = document.querySelector('#form-votes');
@@ -172,6 +177,7 @@
 
     return JSON.stringify({
       requestId: crypto.randomUUID(),
+      publish: true,
       question: title,
       [isBudget ? 'amounts' : 'options']: values,
     });
@@ -215,7 +221,7 @@
           return;
         }
       }
-      done.textContent = 'Saving…';
+      done.textContent = 'Saving and publishing…';
       const endpoint = isBudget ? '/api/budget-votes' : '/api/smart-polls';
       const wasAttempted = saveAttempted;
       saveAttempted = true;
@@ -243,12 +249,23 @@
       }
       saved = true;
       form.hidden = true;
-      success.replaceChildren(ui.icon('check'), document.createTextNode(
-        result.message ?? (isBudget ? 'Budget vote saved' : 'Poll saved'),
-      ));
-      success.hidden = false;
-      success.focus();
-      if (!ui.returnTab) window.setTimeout(leave, 1100);
+      const preview = ['PRELAUNCH_PREVIEW', 'PRELAUNCH_OPEN'].includes(result.status);
+      const published = result.publication === 'published';
+      details.href = route(`${myPage}&id=${encodeURIComponent(result.id)}`);
+      details.textContent = published ? 'View published ballot' : 'View saved ballot';
+      details.hidden = false;
+      if (published || preview) {
+        success.replaceChildren(ui.icon('check'), document.createTextNode(
+          published ? 'Published to the group.' : 'Saved for private preview.',
+        ));
+        success.hidden = false;
+        success.focus();
+      } else {
+        resultError.textContent = result.publication && result.message
+          ? result.message : 'Saved, but group publication could not be confirmed. Open the saved ballot to check its status.';
+        resultError.hidden = false;
+        resultError.focus();
+      }
     } catch {
       showError('Could not confirm the save. Try submitting again.');
     } finally {

@@ -1,3 +1,4 @@
+import { publicationMessage, publishVote } from '../vote-publication.js';
 import { allowsGroupWorkflows, isOwnerPreview } from '../../access/policy.js';
 import { randomBytes } from 'node:crypto';
 import type { Prisma, PrismaClient } from '@prisma/client';
@@ -49,7 +50,7 @@ function promptKeyboard(voteId: string) {
   ]);
 }
 
-function previewKeyboard(voteId: string, saved = false) {
+function previewKeyboard(voteId: string, saved = false, publish = false) {
   if (saved) {
     return Markup.inlineKeyboard([
       [Markup.button.callback('Publish to group', `bv:publish:${voteId}`)],
@@ -62,7 +63,7 @@ function previewKeyboard(voteId: string, saved = false) {
       Markup.button.callback('Edit Amounts', `bv:edit-amounts:${voteId}`),
     ],
     [
-      Markup.button.callback('Done', `bv:done:${voteId}`),
+      Markup.button.callback(publish ? 'Create & Publish' : 'Done', `bv:done:${voteId}`),
       Markup.button.callback('Cancel', `bv:cancel:${voteId}`),
     ],
     [Markup.button.callback('Back', `bv:back:${voteId}`)],
@@ -220,12 +221,12 @@ async function showPreview(
       messageId,
       undefined,
       text,
-      previewKeyboard(vote.id, vote.draftStep === 'SAVED'),
+      previewKeyboard(vote.id, vote.draftStep === 'SAVED', !isOwnerPreview(config)),
     );
   } else {
     const message = await ctx.reply(
       text,
-      previewKeyboard(vote.id, vote.draftStep === 'SAVED'),
+      previewKeyboard(vote.id, vote.draftStep === 'SAVED', !isOwnerPreview(config)),
     );
     await database.budgetVote.updateMany({
       where: { groupId: config.groupId, id: vote.id, creatorId, status: vote.status },
@@ -502,7 +503,7 @@ export function registerNativeBudgetFormHandlers(
     await ctx.answerCbQuery();
     await ctx.editMessageText(
       renderPreview(vote.title, vote.options),
-      previewKeyboard(vote.id),
+      previewKeyboard(vote.id, false, !isOwnerPreview(config)),
     );
   });
 
@@ -546,8 +547,8 @@ export function registerNativeBudgetFormHandlers(
       });
       return;
     }
-    await ctx.answerCbQuery('Budget vote saved.');
     if (isOwnerPreview(config)) {
+      await ctx.answerCbQuery('Budget vote saved.');
       const text = renderPreview(vote.title, vote.options);
       await ctx.editMessageText(
         `Saved privately. This vote has not been sent to the group.\n\n${text}`,
@@ -562,10 +563,14 @@ export function registerNativeBudgetFormHandlers(
         ]),
       );
     } else {
+      const publication = await publishVote(database, ctx.telegram, config, ctx.botInfo.username,
+        'bv', vote.id, BigInt(ctx.from.id)).catch(() => 'unconfirmed' as const);
+      await ctx.answerCbQuery();
       await ctx.editMessageText(
-        `Budget vote saved.\n\n${renderPreview(vote.title, vote.options)}`,
+        `${publicationMessage(publication)}\n\n${renderPreview(vote.title, vote.options)}`,
         Markup.inlineKeyboard([
-          [Markup.button.callback('Publish to group', `bv:publish:${vote.id}`)],
+          ...(publication === 'retry' ? [[Markup.button.callback('Retry publishing', `bv:publish:${vote.id}`)]] : []),
+          [Markup.button.callback('My budget votes', 'bv:list')],
         ]),
       );
     }

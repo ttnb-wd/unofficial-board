@@ -1,5 +1,7 @@
-import { isOwnerPreview } from '../access/policy.js';
+import { allowsGroupWorkflows, isOwnerPreview } from '../access/policy.js';
 import type { PrismaClient } from '@prisma/client';
+import type { Telegram } from 'telegraf';
+import { publicationMessage, publishVote } from '../features/vote-publication.js';
 import { z } from 'zod';
 import type { AppConfig } from '../config.js';
 import { canViewPublished, loadVote, memberSelection, publishedVotes, saveBallot, validSelection } from '../features/vote-store.js';
@@ -8,8 +10,9 @@ import type { Kind, VoteRecord } from '../features/vote-store.js';
 const kind = z.enum(['poll', 'bv']);
 const id = z.string().regex(/^[a-z0-9]{1,30}$/);
 const actions = z.discriminatedUnion('action', [
-  z.strictObject({ action: z.literal('list'), kind, page: z.number().int().min(0).max(9999) }),
-  z.strictObject({ action: z.literal('detail'), kind, id }),
+  z.strictObject({ action: z.literal('list'), kind, page: z.number().int().min(0).max(9999), mine: z.boolean().optional() }),
+  z.strictObject({ action: z.literal('detail'), kind, id, mine: z.boolean().optional() }),
+  z.strictObject({ action: z.literal('publish'), kind, id }),
   z.strictObject({ action: z.literal('submit'), kind, id, mask: z.number().int().min(1).max(1023) }),
 ]);
 
@@ -17,11 +20,13 @@ const reject = (status: number, error: string) => ({ status, body: { error } });
 const accept = <T>(body: T) => ({ status: 200, body });
 const pageSize = 10;
 
-async function list(database: PrismaClient, config: AppConfig, userId: bigint, kind: Kind, page: number) {
+async function list(database: PrismaClient, config: AppConfig, userId: bigint, kind: Kind, page: number, mine: boolean) {
   const preview = isOwnerPreview(config);
   const where = preview
     ? { groupId: config.groupId, creatorId: userId, isPrelaunchTest: true, options: { some: { position: 1 } } }
-    : publishedVotes(config.groupId);
+    : mine
+      ? { groupId: config.groupId, creatorId: userId, isPrelaunchTest: false, draftStep: 'SAVED' as const }
+      : publishedVotes(config.groupId);
   const query = {
     skip: page * pageSize, take: pageSize + 1,
     orderBy: [{ createdAt: 'desc' as const }, { id: 'desc' as const }],
@@ -52,7 +57,7 @@ function present(record: VoteRecord, preview: boolean, mask: number, saved: bool
 }
 
 export async function handleVoteAction(
-  body: unknown, userId: bigint, config: AppConfig, database: PrismaClient, botUsername?: string,
+  body: unknown, userId: bigint, config: AppConfig, database: PrismaClient, botUsername?: string, telegram?: Telegram,
 ) {
   const parsed = actions.safeParse(body);
   if (!parsed.success) return reject(400, 'Choose a valid vote and selection.');
@@ -60,13 +65,31 @@ export async function handleVoteAction(
   const preview = isOwnerPreview(config);
   if (preview && userId !== config.prelaunchOwnerId) return reject(403, 'Owner preview only.');
   if (input.action === 'list') {
-    const result = await list(database, config, userId, input.kind, input.page);
+    const result = await list(database, config, userId, input.kind, input.page, input.mine ?? false);
     const managementUrl = botUsername && /^[a-zA-Z0-9_]+$/.test(botUsername)
       ? `https://t.me/${botUsername}?start=${input.kind === 'poll' ? 'polls' : 'budgets'}` : undefined;
     return accept({ ...result, managementUrl });
   }
 
   const record = await loadVote(database, config.groupId, input.kind, input.id);
+  if (input.action === 'publish') {
+    if (!record || record.creatorId !== userId || record.isPrelaunchTest || !allowsGroupWorkflows(config)) {
+      return reject(404, 'This saved ballot is unavailable.');
+    }
+    if (!telegram || !botUsername) return reject(503, 'Publishing is temporarily unavailable. Your ballot is saved.');
+    const publication = await publishVote(database, telegram, config, botUsername, input.kind, input.id, userId);
+    return accept({ publication, message: publicationMessage(publication) });
+  }
+  const ownerView = input.action === 'detail' && input.mine === true;
+  if (ownerView && !preview) {
+    if (!record || record.creatorId !== userId || record.isPrelaunchTest || record.draftStep !== 'SAVED') {
+      return reject(404, 'This saved ballot is unavailable.');
+    }
+    if (!canViewPublished(config, record)) {
+      return accept({ ...present(record, false, 0, false), status: record.status,
+        canPublish: record.status === 'DRAFT' && record.ready && record.custom && record.telegramMessageId === null });
+    }
+  }
   const allowed = record && (preview
     ? record.creatorId === userId && record.isPrelaunchTest && record.ready
     : canViewPublished(config, record));
