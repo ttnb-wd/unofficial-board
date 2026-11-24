@@ -7,6 +7,7 @@ const requestIdSchema = z.string().uuid();
 export const smartPollSubmissionSchema = z.object({
   requestId: requestIdSchema,
   publish: z.boolean().optional(),
+  multiple: z.boolean().optional(),
   question: z.string().trim().min(1).max(300),
   options: z.array(z.string().trim().min(1).max(100)).min(2).max(10),
 });

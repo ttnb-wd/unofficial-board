@@ -1,8 +1,9 @@
 import { allowsGroupWorkflows, isOwnerPreview } from '../access/policy.js';
 import type { PrismaClient } from '@prisma/client';
 import type { Telegram } from 'telegraf';
-import { publicationMessage, publishVote } from '../features/vote-publication.js';
+import { closePublishedVote, editBudgetDraft, publicationMessage, publishVote } from '../features/vote-publication.js';
 import { z } from 'zod';
+import { budgetVoteSubmissionSchema } from './validation.js';
 import type { AppConfig } from '../config.js';
 import { canViewPublished, loadVote, memberSelection, publishedVotes, saveBallot, validSelection } from '../features/vote-store.js';
 import type { Kind, VoteRecord } from '../features/vote-store.js';
@@ -13,6 +14,8 @@ const actions = z.discriminatedUnion('action', [
   z.strictObject({ action: z.literal('list'), kind, page: z.number().int().min(0).max(9999), mine: z.boolean().optional() }),
   z.strictObject({ action: z.literal('detail'), kind, id, mine: z.boolean().optional() }),
   z.strictObject({ action: z.literal('publish'), kind, id }),
+  z.strictObject({ action: z.literal('close'), kind, id }),
+  z.strictObject({ action: z.literal('editBudget'), kind: z.literal('bv'), id, title: z.string(), amounts: z.array(z.string()) }),
   z.strictObject({ action: z.literal('submit'), kind, id, mask: z.number().int().min(1).max(1023) }),
 ]);
 
@@ -80,6 +83,20 @@ export async function handleVoteAction(
     const publication = await publishVote(database, telegram, config, botUsername, input.kind, input.id, userId);
     return accept({ publication, message: publicationMessage(publication) });
   }
+  if (input.action === 'close' || input.action === 'editBudget') {
+    if (!record || record.creatorId !== userId || record.isPrelaunchTest || !allowsGroupWorkflows(config)) {
+      return reject(404, 'This ballot is unavailable.');
+    }
+    if (input.action === 'editBudget') {
+      const fields = budgetVoteSubmissionSchema.safeParse({ requestId: '00000000-0000-4000-8000-000000000000',
+        question: input.title, amounts: input.amounts });
+      if (!fields.success) return reject(400, 'Enter a title and distinct positive whole MMK amounts.');
+      return await editBudgetDraft(database, config, input.id, userId, fields.data.question, fields.data.amounts)
+        ? accept({ changed: true }) : reject(409, 'This draft changed or was published. Refresh it.');
+    }
+    return (await closePublishedVote(database, config, input.kind, input.id, userId)).count === 1
+      ? accept({ changed: true }) : reject(409, 'This ballot can no longer be closed here.');
+  }
   const ownerView = input.action === 'detail' && input.mine === true;
   if (ownerView && !preview) {
     if (!record || record.creatorId !== userId || record.isPrelaunchTest || record.draftStep !== 'SAVED') {
@@ -87,6 +104,8 @@ export async function handleVoteAction(
     }
     if (!canViewPublished(config, record)) {
       return accept({ ...present(record, false, 0, false), status: record.status,
+        ...(input.kind === 'bv' && 'ranges' in record && record.status === 'DRAFT' && record.telegramMessageId === null
+          ? { amounts: record.options.map(({ amountMmk }) => String(amountMmk)) } : {}),
         canPublish: record.status === 'DRAFT' && record.ready && record.custom && record.telegramMessageId === null });
     }
   }
@@ -98,7 +117,8 @@ export async function handleVoteAction(
     ? `https://t.me/${botUsername}?start=vote_${input.kind}_${record.id}` : undefined;
   if (input.action === 'detail') {
     const mask = !preview && record.custom ? await memberSelection(database, input.kind, record, userId) : 0;
-    return accept({ ...present(record, preview, mask, false), botUrl });
+    return accept({ ...present(record, preview, mask, false), botUrl,
+      canClose: ownerView && !preview && record.custom && record.status === 'OPEN' });
   }
   if (!validSelection(record, input.mask, true)) return reject(400, 'Choose a valid option.');
   if (preview) return accept(present(record, true, input.mask, true));
@@ -106,5 +126,7 @@ export async function handleVoteAction(
     return reject(409, 'This ballot changed or closed. Reopen it for the latest results.');
   }
   const latest = await loadVote(database, config.groupId, input.kind, input.id);
-  return accept(present(latest ?? record, false, input.mask, true));
+  const current = latest ?? record;
+  return accept({ ...present(current, false, input.mask, true),
+    canClose: current.creatorId === userId && current.custom && current.status === 'OPEN' });
 }

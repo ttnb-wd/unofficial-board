@@ -10,6 +10,7 @@ const stack = [];
 const fixtures = new Map();
 let session;
 let busy = false;
+let lastRecord;
 let role = 'debtor';
 let bankProofUrl;
 
@@ -290,7 +291,7 @@ function previewRows(view) {
     outstanding: share.status === 'PAID' ? '0' : share.amount })));
 }
 
-async function list(view) {
+async function list(view, supplied) {
   const mine = view === 'mine';
   const selected = view.split(':')[1] ?? (view === 'debts' ? 'debts' : 'all');
   const items = card();
@@ -316,7 +317,8 @@ async function list(view) {
     if (session.preview) return { items: mine ? [...fixtures.values()] : previewRows(selected), next: null };
     return request(mine ? 'mine' : 'ledger', { ...(mine ? {} : { view: selected }), ...(next ? { after: next } : {}) });
   };
-  const first = await load();
+  const first = supplied ?? await load();
+  lastRecord = JSON.stringify(first);
   add(first.items);
   next = first.next;
   if (!first.items.length) items.append(el('p', mine ? 'No bills yet.' : 'No matching debts.', 'bill-muted'));
@@ -448,8 +450,9 @@ function paymentActions(container, bill, share) {
   container.append(history);
 }
 
-async function detail(id) {
-  const bill = session.preview ? fixtures.get(id) : await request('bill', { id });
+async function detail(id, supplied) {
+  const bill = supplied ?? (session.preview ? fixtures.get(id) : await request('bill', { id }));
+  lastRecord = JSON.stringify(bill);
   if (!bill) throw new Error('Bill unavailable.');
   const header = card();
   header.append(row(amount(bill.total), `Paid by ${bill.receiver}`));
@@ -506,6 +509,23 @@ telegram?.BackButton?.show();
 telegram?.ready();
 telegram?.expand();
 window.addEventListener('pagehide', cleanupProof);
+
+window.BoardUI.refreshVisible(async () => {
+  const view = stack.at(-1);
+  if (!session || session.preview || busy || !view || ['create', 'proof'].includes(view) ||
+      content.querySelector('.bill-payment-entry:not([hidden])')) return;
+  await run(async () => {
+    const id = view.startsWith('bill:') ? view.slice(5) : null;
+    const selected = view.split(':')[1] ?? (view === 'debts' ? 'debts' : 'all');
+    const result = id ? await request('bill', { id })
+      : view === 'mine' ? await request('mine') : await request('ledger', { view: selected });
+    if (JSON.stringify(result) === lastRecord) return;
+    const scroll = window.scrollY;
+    if (id) await detail(id, result);
+    else await list(view, result);
+    window.scrollTo(0, scroll);
+  });
+});
 
 async function start() {
   session = await request('session');

@@ -41,9 +41,12 @@ export async function publishVote(
   }
 
   const where = { ...key, status: 'PUBLISHING' as const };
+  const claimedRecord = await loadVote(db, config.groupId, kind, id);
+  // A draft may have been edited while this worker was acquiring its claim.
+  if (!claimedRecord || claimedRecord.status !== 'PUBLISHING') return 'unconfirmed';
   let messageId: number;
   try {
-    const { text, ...extra } = voteMessage(kind, record, username);
+    const { text, ...extra } = voteMessage(kind, claimedRecord, username);
     type Signal = NonNullable<NonNullable<Parameters<Telegram['callApi']>[2]>['signal']>;
     const message = await telegram.callApi('sendMessage', { chat_id: chatId, text, ...extra },
       { signal: AbortSignal.timeout(10_000) as unknown as Signal });
@@ -61,4 +64,31 @@ export async function publishVote(
   const opened = kind === 'poll' ? await db.smartPoll.updateMany({ where, data })
     : await db.budgetVote.updateMany({ where, data });
   return opened.count === 1 ? 'published' : 'unconfirmed';
+}
+
+export async function closePublishedVote(db: PrismaClient, config: AppConfig, kind: Kind, id: string, creatorId: bigint) {
+  groupDestination(config, config.groupId);
+  const where = { id, groupId: config.groupId, creatorId, isPrelaunchTest: false,
+    status: 'OPEN' as const, telegramMessageId: { not: null } };
+  const now = new Date();
+  const data = { status: 'CLOSED' as const, groupSyncAt: now, closedAt: now };
+  return kind === 'poll'
+    ? db.smartPoll.updateMany({ where: { ...where, telegramPollId: null }, data })
+    : db.budgetVote.updateMany({ where, data });
+}
+
+export async function editBudgetDraft(db: PrismaClient, config: AppConfig, id: string, creatorId: bigint,
+  title: string, amounts: bigint[],
+) {
+  groupDestination(config, config.groupId);
+  return db.$transaction(async (tx) => {
+    const claimed = await tx.budgetVote.updateMany({ where: {
+      id, groupId: config.groupId, creatorId, status: 'DRAFT', draftStep: 'SAVED', isPrelaunchTest: false,
+      telegramMessageId: null,
+    }, data: { title } });
+    if (!claimed.count) return false;
+    await tx.budgetVoteOption.deleteMany({ where: { budgetVoteId: id } });
+    await tx.budgetVoteOption.createMany({ data: amounts.map((amountMmk, position) => ({ budgetVoteId: id, position, amountMmk })) });
+    return true;
+  });
 }

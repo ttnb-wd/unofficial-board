@@ -13,7 +13,7 @@ export function scope(groupId: bigint) {
 
 export async function queueInvitationEdit(tx: Prisma.TransactionClient, id: string, now: Date) {
   await tx.hangoutInvitation.updateMany({
-    where: { hangoutId: id, status: 'SENT', unavailableAt: null, syncAttempts: 0 },
+    where: { hangoutId: id, status: 'SENT', unavailableAt: null },
     data: { syncAt: now, syncAttempts: 0 },
   });
 }

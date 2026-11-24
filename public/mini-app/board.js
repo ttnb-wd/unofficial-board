@@ -96,7 +96,14 @@
     tg.openTelegramLink(event.currentTarget.href);
   }
 
-  window.BoardUI = { tabs, features, element, icon, art, tabUrl, featureUrl, returnTab, backToBoard, header, openBot };
+  function refreshVisible(refresh) {
+    const visible = () => { if (!document.hidden) void refresh(); };
+    document.addEventListener('visibilitychange', visible);
+    window.addEventListener('pageshow', (event) => { if (event.persisted) visible(); });
+    window.setInterval(visible, 30_000);
+  }
+
+  window.BoardUI = { refreshVisible, tabs, features, element, icon, art, tabUrl, featureUrl, returnTab, backToBoard, header, openBot };
 
   if (!Object.hasOwn(features, feature)) return;
   const theme = features[feature];

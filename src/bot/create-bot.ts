@@ -4,7 +4,7 @@ import type { Context } from 'telegraf';
 import type { AppConfig } from '../config.js';
 import { isAuthorizedFeatureContext } from '../access/authorization.js';
 import { canAccessBoard, verifyAndRecordMembership } from '../access/membership.js';
-import { allowsGroupWorkflows, groupDestination, isOwnerPreview } from '../access/policy.js';
+import { allowsGroupWorkflows, groupDestination } from '../access/policy.js';
 import { registerBudgetVoteHandlers } from '../features/group-budget-vote/bot.js';
 import { findFeature, features } from '../features/index.js';
 import { registerSmartPollHandlers } from '../features/smart-poll/bot.js';
@@ -13,6 +13,8 @@ import { registerBirthdayMenu } from '../features/birthday-reminder/bot.js';
 import { registerBillMenus } from '../features/bill-splitter/bot.js';
 import { countdownKeyboard, registerCountdownMenu } from '../features/plan-countdown/bot.js';
 import { hangoutKeyboard, registerHangoutMenu } from '../features/one-tap-hangout/bot.js';
+import { registerSharedBillChat } from './shared-bill-chat.js';
+import { registerSharedEventChat } from './shared-event-chat.js';
 import { registerVoting } from './voting.js';
 import {
   dashboardKeyboard,
@@ -37,6 +39,7 @@ export function createBot(
   botUsername: string,
   logger: ReturnType<typeof createLogger>,
   wakeHangouts = () => {},
+  wakeGroupUpdates = () => {},
 ): Telegraf {
   const bot = new Telegraf(config.botToken);
   const authorize = (ctx: Context, allowGroupChat = false) =>
@@ -54,9 +57,8 @@ export function createBot(
   }
 
   bot.use(async (ctx, next) => {
-    if (isOwnerPreview(config) && ctx.chat?.type !== 'private') return;
-    if (config.testGroup && ctx.chat && ctx.chat.type !== 'private' &&
-        (!['group', 'supergroup'].includes(ctx.chat.type) || BigInt(ctx.chat.id) !== config.groupId)) return;
+    if (ctx.chat && ctx.chat.type !== 'private' && (!allowsGroupWorkflows(config) ||
+        !['group', 'supergroup'].includes(ctx.chat.type) || BigInt(ctx.chat.id) !== config.groupId)) return;
     await next();
   });
 
@@ -116,11 +118,13 @@ export function createBot(
     await showGroupEntry(ctx);
   });
 
+  registerSharedBillChat(bot, config, database, authorize, wakeGroupUpdates);
+  registerSharedEventChat(bot, config, database, authorize, wakeGroupUpdates);
   registerBillMenus(bot, config, authorize);
   registerBirthdayMenu(bot, config, database, authorize);
   registerCountdownMenu(bot, config, authorize);
   registerHangoutMenu(bot, config, database, authorize, wakeHangouts);
-  registerVoting(bot, config, database, botUsername, authorize);
+  registerVoting(bot, config, database, botUsername, authorize, wakeGroupUpdates);
 
   bot.start(async (ctx) => {
     if (ctx.chat.type !== 'private') {

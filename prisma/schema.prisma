@@ -510,10 +510,12 @@ model PlanCountdownDelivery {
   attemptAt         DateTime?               @db.Timestamptz(3)
   attempts          Int                     @default(0)
   telegramMessageId Int?
+  syncAt            DateTime?               @db.Timestamptz(3)
   countdown         PlanCountdown           @relation(fields: [countdownId], references: [id], onDelete: Restrict)
 
   @@id([countdownId, kind])
   @@index([status, nextAttemptAt])
+  @@index([kind, status, syncAt])
 }
 
 enum HangoutRsvp {

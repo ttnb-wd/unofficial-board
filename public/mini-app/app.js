@@ -31,11 +31,13 @@
   const choices = document.querySelector('#choices');
   const add = document.querySelector('#add-choice');
   const done = document.querySelector('#done');
+  const saveDraft = document.querySelector('#save-draft');
   const error = document.querySelector('#form-error');
   const success = document.querySelector('#success-message');
   const maxMmk = 9_223_372_036_854_775_807n;
   let pendingBody;
   let saveAttempted = false;
+  let pendingPublish;
   let saved = false;
   const saveLabel = 'Create & Publish';
   const route = (path) => ui.returnTab ? ui.featureUrl(path, ui.returnTab) : '/mini-app' + path;
@@ -111,6 +113,7 @@
     add.textContent = `+ ${labels.add}`;
     question.placeholder = isBudget ? 'e.g. Weekend trip budget' : 'e.g. Where should we go this weekend?';
     readyButton();
+    document.querySelector('#multiple-choice').hidden = isBudget;
     if (isBudget) {
       addChoice('10000');
       addChoice('20000');
@@ -141,7 +144,7 @@
     error.hidden = true;
   });
 
-  function buildSubmission() {
+  function buildSubmission(publish) {
     error.hidden = true;
     const invalid = form.querySelector('[aria-invalid]');
     invalid?.removeAttribute('aria-invalid');
@@ -177,7 +180,8 @@
 
     return JSON.stringify({
       requestId: crypto.randomUUID(),
-      publish: true,
+      publish,
+      ...(!isBudget && document.querySelector('#multiple').checked ? { multiple: true } : {}),
       question: title,
       [isBudget ? 'amounts' : 'options']: values,
     });
@@ -206,22 +210,26 @@
 
   form.addEventListener('submit', async (event) => {
     event.preventDefault();
-    if (done.disabled || saved) return;
-    pendingBody ??= buildSubmission();
+    const submit = event.submitter === saveDraft ? saveDraft : done;
+    if (submit.disabled || saved) return;
+    if (!pendingBody) {
+      pendingPublish = submit !== saveDraft;
+      pendingBody = buildSubmission(pendingPublish);
+    }
     if (!pendingBody) return;
 
     error.hidden = true;
     fields.disabled = true;
-    done.disabled = true;
+    saveDraft.disabled = done.disabled = true;
     try {
       if (apiOrigin) {
-        done.textContent = 'Connecting…';
+        submit.textContent = 'Connecting…';
         if (!(await waitForApi())) {
           showError('The server is still waking up. Try submitting again.');
           return;
         }
       }
-      done.textContent = 'Saving and publishing…';
+      submit.textContent = pendingPublish ? 'Saving and publishing…' : 'Saving draft…';
       const endpoint = isBudget ? '/api/budget-votes' : '/api/smart-polls';
       const wasAttempted = saveAttempted;
       saveAttempted = true;
@@ -254,9 +262,9 @@
       details.href = route(`${myPage}&id=${encodeURIComponent(result.id)}`);
       details.textContent = published ? 'View published ballot' : 'View saved ballot';
       details.hidden = false;
-      if (published || preview) {
+      if (published || preview || !pendingPublish) {
         success.replaceChildren(ui.icon('check'), document.createTextNode(
-          published ? 'Published to the group.' : 'Saved for private preview.',
+          published ? 'Published to the group.' : preview ? 'Saved for private preview.' : 'Draft saved.',
         ));
         success.hidden = false;
         success.focus();
@@ -272,7 +280,9 @@
       if (!saved) {
         if (!saveAttempted) pendingBody = undefined;
         fields.disabled = saveAttempted;
-        done.disabled = false;
+        done.disabled = saveAttempted && !pendingPublish;
+        saveDraft.disabled = saveAttempted && pendingPublish;
+        saveDraft.textContent = 'Save Draft';
         readyButton();
       }
     }

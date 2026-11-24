@@ -7,7 +7,10 @@ import type { AppConfig } from '../config.js';
 import { navigationRow, showScreen } from './navigation.js';
 
 import { canViewPublished, loadVote, publishedVotes, saveBallot, validSelection } from '../features/vote-store.js';
-import { publicationMessage, publishVote } from '../features/vote-publication.js';
+import { closePublishedVote, editBudgetDraft, publicationMessage, publishVote } from '../features/vote-publication.js';
+import { requestFor } from './shared-event-chat.js';
+import { saveBudgetVote, savePoll } from '../features/vote-submission.js';
+import { budgetVoteSubmissionSchema, smartPollSubmissionSchema } from '../mini-app/validation.js';
 import type { Choice, Kind, VoteRecord } from '../features/vote-store.js';
 
 type View = 'mine' | 'group' | 'samples';
@@ -59,6 +62,7 @@ export function registerVoting(
   database: PrismaClient,
   botUsername: string,
   authorize: (ctx: Context, allowGroup?: boolean) => Promise<boolean>,
+  wake = () => {},
 ) {
   const load = (kind: Kind, id: string) => loadVote(database, config.groupId, kind, id);
 
@@ -102,7 +106,9 @@ export function registerVoting(
       : view === 'group' ? 'Published votes' : 'Member View Preview · Simulation';
     if (ctx.callbackQuery) await ctx.answerCbQuery();
     await showScreen(ctx, `${label(kind)} · ${heading}${records.length ? '' : '\n\nNo records on this page.'}`,
-      Markup.inlineKeyboard([...rows, ...(pages.length ? [pages] : []), navigationRow(featureRoute(kind))]));
+      Markup.inlineKeyboard([...rows, ...(pages.length ? [pages] : []),
+        ...(allowsGroupWorkflows(config) ? [[button('Create in chat', 'vcreate:' + kind), button('Refresh', listRoute(kind, view, page))]] : []),
+        navigationRow(featureRoute(kind))]));
   }
 
   function canView(ctx: Context, mode: Mode, record: VoteRecord) {
@@ -114,7 +120,7 @@ export function registerVoting(
     return canViewPublished(config, record);
   }
 
-  function draw(ctx: Context, kind: Kind, mode: Mode, record: VoteRecord, page: number, action = '', mask = 0) {
+  function draw(ctx: Context, kind: Kind, mode: Mode, record: VoteRecord, page: number, action = '', mask = 0, notice = '') {
     const route = detailRoute(kind, mode, record.id, page);
     const view = mode === 'owner' ? 'mine' : mode === 'sample' ? 'samples' : 'group';
     const nav = navigationRow(mode === 'preview'
@@ -151,7 +157,9 @@ export function registerVoting(
       if (allowsGroupWorkflows(config) && published && record.status === 'OPEN') {
         rows.push([button('Close voting', kind === 'poll' && !record.custom ? `poll:close:${record.id}` : `${route}:c`)]);
       }
-      return showScreen(ctx, [text, statusLabel(record.status, published), ...record.choices.map((choice) => choice.label)].join('\n'),
+      return showScreen(ctx, [notice, text, statusLabel(record.status, published),
+        ...(kind === 'bv' && record.status === 'DRAFT' && record.draftStep === 'SAVED' && !record.isPrelaunchTest && allowsGroupWorkflows(config)
+          ? ['Edit with /budgetedit ' + record.id + ' | title | 10000,20000,30000'] : []), ...record.choices.map((choice) => choice.label)].filter(Boolean).join('\n'),
         Markup.inlineKeyboard([...rows, nav]));
     }
 
@@ -173,14 +181,56 @@ export function registerVoting(
     ]));
   }
 
-  async function closeVote(kind: Kind, record: VoteRecord) {
-    const where = { id: record.id, groupId: config.groupId, creatorId: record.creatorId,
-      status: 'OPEN' as const, isPrelaunchTest: false };
-    const now = new Date();
-    const data = { status: 'CLOSED' as const, groupSyncAt: now, closedAt: now };
-    return kind === 'poll' ? database.smartPoll.updateMany({ where, data })
-      : database.budgetVote.updateMany({ where, data });
-  }
+  const createUsage = (kind: Kind) => kind === 'poll'
+    ? '/pollcreate Question | Option 1 | Option 2\nOptional first part: draft, multiple, or draft multiple.'
+    : '/budgetcreate Title | 10000 | 20000 | 30000\nAdd draft as the first part to save privately.';
+
+  bot.action(/^vcreate:(poll|bv)$/, async (ctx) => {
+    if (!await allowed(ctx) || !allowsGroupWorkflows(config)) return;
+    await ctx.answerCbQuery();
+    await ctx.reply(createUsage(ctx.match[1] as Kind));
+  });
+  bot.command(['pollcreate', 'budgetcreate'], async (ctx) => {
+    if (!await allowed(ctx) || !ctx.from || !allowsGroupWorkflows(config)) return;
+    const kind: Kind = ctx.command === 'pollcreate' ? 'poll' : 'bv';
+    const parts = ctx.payload.split('|').map((part) => part.trim());
+    const mode = parts.length >= 4 && /^(draft|multiple|draft multiple)$/i.test(parts[0]!) ? parts.shift()!.toLowerCase() : '';
+    const [question, ...options] = parts;
+    const requestId = requestFor(ctx);
+    const owner = BigInt(ctx.from.id);
+    let saved;
+    if (kind === 'poll') {
+      const input = smartPollSubmissionSchema.safeParse({ requestId, question, options, multiple: mode.includes('multiple') });
+      if (!input.success) { await ctx.reply(createUsage(kind)); return; }
+      saved = await savePoll(database, config, owner, input.data);
+    } else {
+      const input = budgetVoteSubmissionSchema.safeParse({ requestId, question, amounts: options });
+      if (!input.success || mode.includes('multiple')) { await ctx.reply(createUsage(kind)); return; }
+      saved = await saveBudgetVote(database, config, owner, input.data);
+    }
+    const notice = mode.startsWith('draft') ? 'Draft saved.' : publicationMessage(
+      await publishVote(database, ctx.telegram, config, botUsername, kind, saved.id, owner)
+        .catch(() => 'unconfirmed' as const),
+    );
+    const record = await load(kind, saved.id);
+    if (record) await draw(ctx, kind, 'owner', record, 0, '', 0, notice);
+  });
+
+  bot.command('budgetedit', async (ctx) => {
+    if (!await allowed(ctx) || !ctx.from || !allowsGroupWorkflows(config)) return;
+    const [id, question, amounts, ...extra] = ctx.payload.split('|').map((part) => part.trim());
+    const input = budgetVoteSubmissionSchema.safeParse({ requestId: '00000000-0000-4000-8000-000000000000',
+      question, amounts: amounts?.split(',') });
+    if (!id || !/^[a-z0-9]{1,30}$/.test(id) || extra.length || !input.success) {
+      await ctx.reply('Use /budgetedit ID | title | 10000,20000,30000');
+      return;
+    }
+    const owner = BigInt(ctx.from.id);
+    const changed = await editBudgetDraft(database, config, id, owner, input.data.question, input.data.amounts);
+    const record = changed && await load('bv', id);
+    if (record) await draw(ctx, 'bv', 'owner', record, 0);
+    else await ctx.reply('This draft is unavailable or already published.');
+  });
 
   bot.action(/^gv:(poll|bv):([a-z0-9]{1,30}):([0-9])$/, async (ctx) => {
     const message = ctx.callbackQuery.message;
@@ -194,6 +244,7 @@ export function registerVoting(
     const record = await load(kind, ctx.match[2]!);
     const saved = record && !record.multiple && record.telegramMessageId === message.message_id &&
       await saveBallot(database, config, kind, record, BigInt(ctx.from.id), 1 << Number(ctx.match[3]));
+    if (saved) wake();
     await ctx.answerCbQuery(saved ? 'Vote saved.' : 'This ballot is unavailable.');
   });
 
@@ -257,11 +308,12 @@ export function registerVoting(
       try {
         notice = action === 'p'
           ? publicationMessage(await publishVote(database, ctx.telegram, config, botUsername, kind, id, record.creatorId))
-          : (await closeVote(kind, record)).count === 1 ? 'Voting closed.' : 'This action is no longer available.';
+          : (await closePublishedVote(database, config, kind, id, record.creatorId)).count === 1 ? 'Voting closed.' : 'This action is no longer available.';
       } catch (error) {
         await ctx.answerCbQuery('Could not confirm the action. Reopen the detail to check its status.', { show_alert: true });
         throw error;
       }
+      if (action === 'c') wake();
       record = await load(kind, id) ?? record;
     } else if (action === 'o' || action === 's' || mask > 0) {
       if (mode === 'owner' || !validSelection(record, mask, action === 's') ||
@@ -281,6 +333,7 @@ export function registerVoting(
           await ctx.answerCbQuery('Voting has closed.');
           return;
         }
+        wake();
         record = await load(kind, id) ?? record;
       }
     }

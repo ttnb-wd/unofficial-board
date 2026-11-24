@@ -17,6 +17,8 @@
   const monthLabel = new Intl.DateTimeFormat('en', { month: 'long', timeZone: 'UTC' });
   let busy = false;
   let birthday = null;
+  let editing = false;
+  let upcomingSnapshot;
 
   function birthdayUrl(path) {
     return ui.returnTab ? ui.featureUrl(path, ui.returnTab) : '/mini-app' + path;
@@ -94,6 +96,8 @@
 
   function renderItems(items) {
     const content = get('content');
+    content.replaceChildren();
+    upcomingSnapshot = JSON.stringify(items);
     for (const item of items) {
       const row = document.createElement('div');
       row.className = 'bill-row';
@@ -129,11 +133,13 @@
     }, 'Connecting…', true);
   }
 
+  form.addEventListener('change', () => { editing = true; });
   month.addEventListener('change', () => updateDays(day.value));
   form.addEventListener('submit', (event) => {
     event.preventDefault();
     void run(async () => {
       const result = await request('save', { month: Number(month.value), day: Number(day.value) });
+      editing = false;
       renderBirthday(result.birthday);
       message('status', 'Birthday saved.');
     }, 'Saving…');
@@ -144,6 +150,7 @@
       if (!confirmed) return;
       void run(async () => {
         await request('remove');
+        editing = false;
         renderBirthday(null);
         message('status', 'Birthday removed.');
       }, 'Removing…');
@@ -152,6 +159,27 @@
       telegram.showConfirm('Remove your birthday from Birthday Reminder?', confirmRemoval);
     } else {
       confirmRemoval(window.confirm('Remove your birthday from Birthday Reminder?'));
+    }
+  });
+
+  ui.refreshVisible(async () => {
+    if (!telegram?.initData || busy || editing || view === 'preview' || (view !== 'upcoming' && form.hidden)) return;
+    busy = true;
+    try {
+      if (view === 'upcoming') {
+        const result = await request('upcoming');
+        if (JSON.stringify(result.items) !== upcomingSnapshot) renderItems(result.items);
+      } else {
+        const result = await request('session');
+        if (!editing && JSON.stringify(result.birthday) !== JSON.stringify(birthday)) renderBirthday(result.birthday);
+      }
+      message('error');
+      retry.hidden = true;
+    } catch (failure) {
+      message('error', failure.message);
+      retry.hidden = false;
+    } finally {
+      busy = false;
     }
   });
 

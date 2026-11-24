@@ -30,6 +30,9 @@ export function dashboardKeyboard(config: AppConfig) {
   for (let index = 0; index < featureButtons.length; index += 2) {
     rows.push(featureButtons.slice(index, index + 2));
   }
+  if (config.accessMode === 'LIVE' || config.testGroup) {
+    rows.push([Markup.button.callback('Manage in chat', 'native:menu')]);
+  }
   return Markup.inlineKeyboard(rows);
 }
 

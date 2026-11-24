@@ -70,6 +70,12 @@ export async function handleCountdownAction(input: unknown, userId: bigint, conf
   }
   if (preview) return error(403, 'Use the isolated countdown preview.');
   const scope = { groupId: config.groupId };
+  const announcement = (countdownId: string) => db.planCountdownDelivery.findUnique({
+    where: { countdownId_kind: { countdownId, kind: 'ANNOUNCEMENT' } }, select: { status: true },
+  });
+  const scheduleRefresh = (tx: Prisma.TransactionClient, countdownId: string, syncAt: Date) =>
+    tx.planCountdownDelivery.updateMany({ where: { countdownId, kind: 'ANNOUNCEMENT', status: 'SENT', countdown: scope },
+      data: { syncAt } });
   if (action.action === 'mine' || action.action === 'upcoming' || action.action === 'completed') {
     const descending = action.action === 'completed';
     const direction = descending ? 'desc' : 'asc';
@@ -93,7 +99,7 @@ export async function handleCountdownAction(input: unknown, userId: bigint, conf
   }
   if (action.action === 'detail') {
     const plan = await db.planCountdown.findFirst({ where: { ...scope, id: action.id } });
-    return plan ? ok({ plan: present(plan, userId) }) : error(404, 'Countdown not found.');
+    return plan ? ok({ plan: { ...present(plan, userId), delivery: (await announcement(plan.id))?.status ?? null } }) : error(404, 'Countdown not found.');
   }
 
   return db.$transaction(async (tx) => {
@@ -131,6 +137,7 @@ export async function handleCountdownAction(input: unknown, userId: bigint, conf
         where: { countdownId: plan.id, status: 'QUEUED' },
         data: { status: 'SKIPPED' },
       });
+      await scheduleRefresh(tx, plan.id, mutationTime);
       return ok({ plan: present(cancelled, userId) });
     }
     const startsAt = parseYangonTime(action.date, action.time);
@@ -158,6 +165,7 @@ export async function handleCountdownAction(input: unknown, userId: bigint, conf
         });
       }
     }
+    await scheduleRefresh(tx, plan.id, mutationTime);
     return ok({ plan: present(updated, userId) });
   }, { timeout: 30_000 });
 }

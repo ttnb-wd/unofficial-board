@@ -65,9 +65,9 @@ export async function handleHangoutAction(
   }
   if (action.action === 'detail') {
     const event = await db.hangout.findFirst({
-      where: { ...group, id: action.id }, include: { responses: { orderBy: { displayName: 'asc' } } },
+      where: { ...group, id: action.id }, include: { responses: { orderBy: { displayName: 'asc' } }, invitation: { select: { status: true } } },
     });
-    return event ? ok({ hangout: present(event, actor.id, now, event.responses, true) }) : reject(404, 'Hangout not found.');
+    return event ? ok({ hangout: { ...present(event, actor.id, now, event.responses, true), delivery: event.invitation?.status ?? null } }) : reject(404, 'Hangout not found.');
   }
   if (action.action === 'rsvp') {
     const result = await respondToHangout(db, config, action.id, actor, action.response, undefined, clock);

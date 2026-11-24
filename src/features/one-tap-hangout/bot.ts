@@ -17,7 +17,7 @@ export function hangoutKeyboard(config: AppConfig, id?: string) {
       if (id) url.searchParams.set('id', id);
       return [Markup.button.webApp(text, url.href)];
     };
-    if (id) rows.push(launch('View Details', 'detail'));
+    if (id) rows.push(launch('View Details', 'detail'), [Markup.button.callback('View and RSVP in chat', 'eh:view:' + id)]);
     else {
       rows.push(launch('Create Hangout', 'create'), launch('Active Hangouts', 'active'),
         launch('My Hangouts', 'mine'), launch('Completed Hangouts', 'completed'));

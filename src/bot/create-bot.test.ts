@@ -144,6 +144,7 @@ describe('PRELAUNCH bot access', () => {
     expect(apiCall).toHaveBeenCalledWith('sendMessage', expect.objectContaining({
       reply_markup: { inline_keyboard: [
         [{ text: 'View Countdown', hide: false, web_app: { url: `https://mini.example/mini-app/countdown?view=detail&id=${id}` } }],
+        [{ text: 'View in chat', hide: false, callback_data: 'ec:view:' + id }],
         [{ text: 'Back', hide: false, callback_data: 'feature:plan-countdown' },
           { text: 'Main Menu', hide: false, callback_data: 'nav:home' }],
       ] },

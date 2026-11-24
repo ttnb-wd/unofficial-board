@@ -30,6 +30,8 @@ let timers = [];
 const tick = () => timers.forEach((update) => update());
 const listViews = ['upcoming', 'mine', 'completed'];
 let busy = false;
+let refreshing = false;
+let lastViewData;
 let syncing = false;
 
 tg?.ready();
@@ -212,6 +214,8 @@ function renderTimer(plan, card, onStatus = () => {}) {
 function renderDetail(plan, memberView, returnView, returnPage) {
   const card = element('article', '', 'bill-card');
   card.append(element('h2', plan.title), element('p', formatDate(plan.startsAt), 'countdown-muted'));
+  if (plan.delivery) card.append(element('p', 'Group announcement: ' +
+    ({ SENT: 'sent', UNKNOWN: 'delivery unconfirmed', FAILED: 'failed' }[plan.delivery] ?? plan.delivery.toLowerCase()), 'countdown-muted'));
   if (plan.description) card.append(element('p', plan.description, 'countdown-copy'));
   const actions = element('div', '', 'bill-actions');
   content.append(card, actions);
@@ -254,6 +258,7 @@ function renderList({ plans, nextCursor }, view, pages) {
 async function open(view, options = {}) {
   if (!Object.hasOwn(labels, view) || (!preview && ['preview', 'member'].includes(view))) view = 'menu';
   const token = ++routeToken;
+  lastViewData = undefined;
   current = { view, ...options };
   const url = new URL(location.href);
   url.searchParams.set('view', view === 'edit' ? 'detail' : view);
@@ -279,12 +284,14 @@ async function open(view, options = {}) {
     if (view === 'detail') {
       const { plan } = options.plan ? options : await run('detail', { id: options.id });
       if (token !== routeToken) return;
+      lastViewData = JSON.stringify(plan);
       renderDetail(plan, false, options.returnView, options.returnPage);
     }
     if (listViews.includes(view)) {
       const pages = options.pages || [];
       const result = await run(view, { cursor: pages.at(-1) });
       if (token !== routeToken) return;
+      lastViewData = JSON.stringify([result.plans, result.nextCursor]);
       renderList(result, view, pages);
     }
     if (view === 'member') renderDetail(fixtures.find((plan) => plan.id === 'fixture-picnic'), true);
@@ -329,6 +336,7 @@ function setBusy(value) {
 
 async function cancel(plan, returnView) {
   if (busy) return;
+  ++routeToken;
   setBusy(true);
   showError();
   try {
@@ -408,6 +416,30 @@ function resume() {
 
 document.addEventListener('visibilitychange', () => { if (!document.hidden) resume(); });
 window.addEventListener('pageshow', (event) => { if (event.persisted) resume(); });
+
+window.BoardUI.refreshVisible(async () => {
+  const { view, id, pages = [] } = current;
+  if (preview || busy || refreshing || !loading.hidden || !lastViewData ||
+      (view !== 'detail' && !listViews.includes(view))) return;
+  const token = routeToken;
+  refreshing = true;
+  try {
+    const result = await api(view, view === 'detail' ? { id } : { cursor: pages.at(-1) });
+    if (token !== routeToken || busy) return;
+    const value = JSON.stringify(view === 'detail' ? result.plan : [result.plans, result.nextCursor]);
+    if (value === lastViewData) return;
+    lastViewData = value;
+    showError();
+    content.replaceChildren();
+    timers = [];
+    if (view === 'detail') renderDetail(result.plan, false, current.returnView, current.returnPage);
+    else renderList(result, view, pages);
+  } catch {
+    if (token === routeToken && !busy) showError('Could not refresh. This view may be out of date.');
+  } finally {
+    refreshing = false;
+  }
+});
 
 async function initialize() {
   loading.hidden = false;

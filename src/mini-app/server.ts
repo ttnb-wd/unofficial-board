@@ -1,16 +1,17 @@
 import { allowsGroupWorkflows, isOwnerPreview } from '../access/policy.js';
-import { randomBytes } from 'node:crypto';
 import { createServer } from 'node:http';
 import type { IncomingMessage, Server, ServerResponse } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { Prisma, PrismaClient } from '@prisma/client';
+import type { PrismaClient } from '@prisma/client';
 import { Telegram } from 'telegraf';
 import type { AppConfig } from '../config.js';
 import { canAccessBoard } from '../access/membership.js';
 import type { createLogger } from '../logger.js';
 import { handleBillAction } from '../features/bill-splitter/api.js';
+import { MiniAppPersistenceError, saveBudgetVote, savePoll, SubmissionConflictError } from '../features/vote-submission.js';
+import type { SavedSubmission } from '../features/vote-submission.js';
 import { publicationMessage, publishVote } from '../features/vote-publication.js';
 import { refreshGroupMessages } from '../features/group-message.js';
 import { deliverBills } from '../features/bill-splitter/delivery.js';
@@ -39,11 +40,6 @@ const MAX_BODY_BYTES = 16_384;
 type RequestIdentity = {
   userId: bigint;
   name: string;
-};
-
-type SavedSubmission = {
-  id: string;
-  created: boolean;
 };
 
 function errorName(error: unknown): string {
@@ -281,225 +277,6 @@ async function createSubmission(
   }
 }
 
-class SubmissionConflictError extends Error {}
-
-class MiniAppPersistenceError extends Error {
-  constructor(
-    readonly operation: string,
-    readonly original: unknown,
-  ) {
-    super('Mini App persistence failed');
-  }
-}
-
-type SubmissionRow = {
-  creatorId: bigint;
-  feature: 'SMART_POLL' | 'BUDGET_VOTE';
-  resourceId: string;
-  groupId: bigint | null;
-};
-
-async function findExistingSubmission(
-  transaction: Prisma.TransactionClient,
-  requestId: string,
-  userId: bigint,
-  groupId: bigint,
-  feature: SubmissionRow['feature'],
-): Promise<SavedSubmission | null> {
-  await transaction.$executeRaw`
-    SELECT pg_advisory_xact_lock(hashtextextended(${requestId}, 0))
-  `;
-  const rows = await transaction.$queryRaw<SubmissionRow[]>`
-    SELECT s."creatorId", s."feature", s."resourceId", COALESCE(p."groupId", b."groupId") AS "groupId"
-    FROM "MiniAppSubmission" s
-    LEFT JOIN "SmartPoll" p ON s."feature" = 'SMART_POLL' AND p."id" = s."resourceId" AND p."creatorId" = s."creatorId"
-    LEFT JOIN "BudgetVote" b ON s."feature" = 'BUDGET_VOTE' AND b."id" = s."resourceId" AND b."creatorId" = s."creatorId"
-    WHERE s."requestId" = ${requestId}
-    FOR UPDATE OF s
-  `;
-  const existing = rows[0];
-  if (!existing) {
-    return null;
-  }
-  if (existing.creatorId !== userId || existing.feature !== feature || existing.groupId !== groupId) {
-    throw new SubmissionConflictError();
-  }
-  return { id: existing.resourceId, created: false };
-}
-
-async function savePoll(
-  database: PrismaClient,
-  config: AppConfig,
-  userId: bigint,
-  submission: {
-    requestId: string;
-    question: string;
-    options: string[];
-  },
-): Promise<SavedSubmission> {
-  let operation = 'idempotency-lock-and-lookup';
-  try {
-    return await database.$transaction(async (transaction) => {
-      const requestId = config.testGroup ? `test:${config.groupId}:${submission.requestId}` : submission.requestId;
-      const existing = await findExistingSubmission(
-        transaction,
-        requestId,
-        userId,
-        config.groupId,
-        'SMART_POLL',
-      );
-      if (existing) {
-        return existing;
-      }
-      operation = 'upsert-configured-group';
-      await transaction.telegramGroup.upsert({
-        where: { telegramId: config.groupId },
-        create: {
-          telegramId: config.groupId,
-          isPrelaunchTest: isOwnerPreview(config),
-        },
-        update: {},
-      });
-      operation = 'upsert-owner-record';
-      await transaction.member.upsert({
-        where: { telegramId: userId },
-        create: {
-          telegramId: userId,
-          isPrelaunchTest: isOwnerPreview(config),
-        },
-        update: {},
-      });
-      operation = 'create-poll-and-options';
-      const poll = await transaction.smartPoll.create({
-        data: {
-          groupId: config.groupId,
-          creatorId: userId,
-          question: submission.question,
-          draftStep: 'SAVED',
-          status:
-            isOwnerPreview(config)
-              ? 'PRELAUNCH_PREVIEW'
-              : 'DRAFT',
-          isPrelaunchTest: isOwnerPreview(config),
-          options: {
-            create: submission.options.map((text, position) => ({
-              position,
-              text,
-            })),
-          },
-        },
-        select: { id: true },
-      });
-      operation = 'record-idempotency-key';
-      await transaction.$executeRaw`
-        INSERT INTO "MiniAppSubmission" ("requestId", "feature", "creatorId", "resourceId")
-        VALUES (${requestId}, 'SMART_POLL'::"MiniAppSubmissionFeature", ${userId}, ${poll.id})
-      `;
-      return { id: poll.id, created: true };
-    }, { isolationLevel: 'ReadCommitted', maxWait: 10_000, timeout: 30_000 });
-  } catch (error) {
-    if (error instanceof SubmissionConflictError) {
-      throw error;
-    }
-    throw new MiniAppPersistenceError(operation, error);
-  }
-}
-
-type SavedBudgetVote = SavedSubmission & {
-  options: { id: string; amountMmk: bigint }[];
-};
-
-async function saveBudgetVote(
-  database: PrismaClient,
-  config: AppConfig,
-  userId: bigint,
-  submission: {
-    requestId: string;
-    question: string;
-    amounts: bigint[];
-  },
-): Promise<SavedBudgetVote> {
-  let operation = 'idempotency-lock-and-lookup';
-  try {
-    return await database.$transaction(async (transaction) => {
-      const requestId = config.testGroup ? `test:${config.groupId}:${submission.requestId}` : submission.requestId;
-      const existing = await findExistingSubmission(
-        transaction,
-        requestId,
-        userId,
-        config.groupId,
-        'BUDGET_VOTE',
-      );
-      if (existing) {
-        operation = 'load-existing-budget-options';
-        const options = await transaction.$queryRaw<
-          { id: string; amountMmk: bigint }[]
-        >`
-          SELECT "id", "amountMmk"
-          FROM "BudgetVoteOption"
-          WHERE "budgetVoteId" = ${existing.id}
-          ORDER BY "position" ASC
-        `;
-        return { ...existing, options };
-      }
-      operation = 'upsert-configured-group';
-      await transaction.telegramGroup.upsert({
-        where: { telegramId: config.groupId },
-        create: {
-          telegramId: config.groupId,
-          isPrelaunchTest: isOwnerPreview(config),
-        },
-        update: {},
-      });
-      operation = 'upsert-owner-record';
-      await transaction.member.upsert({
-        where: { telegramId: userId },
-        create: {
-          telegramId: userId,
-          isPrelaunchTest: isOwnerPreview(config),
-        },
-        update: {},
-      });
-      operation = 'create-budget-vote';
-      const vote = await transaction.budgetVote.create({
-        data: {
-          groupId: config.groupId,
-          creatorId: userId,
-          title: submission.question,
-          status:
-            isOwnerPreview(config)
-              ? 'PRELAUNCH_OPEN'
-              : 'DRAFT',
-          draftStep: 'SAVED',
-          isPrelaunchTest: isOwnerPreview(config),
-        },
-        select: { id: true },
-      });
-      const options: { id: string; amountMmk: bigint }[] = [];
-      operation = 'insert-exact-budget-options';
-      for (const [position, amountMmk] of submission.amounts.entries()) {
-        const id = randomBytes(12).toString('base64url');
-        await transaction.$executeRaw`
-          INSERT INTO "BudgetVoteOption" ("id", "budgetVoteId", "position", "amountMmk")
-          VALUES (${id}, ${vote.id}, ${position}, ${amountMmk})
-        `;
-        options.push({ id, amountMmk });
-      }
-      operation = 'record-idempotency-key';
-      await transaction.$executeRaw`
-        INSERT INTO "MiniAppSubmission" ("requestId", "feature", "creatorId", "resourceId")
-        VALUES (${requestId}, 'BUDGET_VOTE'::"MiniAppSubmissionFeature", ${userId}, ${vote.id})
-      `;
-      return { id: vote.id, created: true, options };
-    }, { isolationLevel: 'ReadCommitted', maxWait: 10_000, timeout: 30_000 });
-  } catch (error) {
-    if (error instanceof SubmissionConflictError) {
-      throw error;
-    }
-    throw new MiniAppPersistenceError(operation, error);
-  }
-}
-
 const pageAssets = new Map([
   ['/mini-app', 'index.html'],
   ['/mini-app/bills', 'bills.html'],
@@ -562,6 +339,7 @@ export function createMiniAppServer(
 ): {
   listen: () => Promise<void>;
   wakeHangouts: () => void;
+  wakeGroupUpdates: () => void;
   close: () => Promise<void>;
 } {
   const frontendOrigin = config.miniAppUrl ? new URL(config.miniAppUrl).origin : undefined;
@@ -669,7 +447,7 @@ export function createMiniAppServer(
           return;
         }
         const result = await handleVoteAction(body, actor.userId, config, database, botUsername, telegram);
-        if (result.status === 200 && typeof body === 'object' && body && 'action' in body && body.action === 'submit') kick();
+        if (result.status === 200 && typeof body === 'object' && body && 'action' in body && ['submit', 'close'].includes(String(body.action))) kick();
         sendJson(response, result.status, result.body);
         return;
       }
@@ -725,7 +503,8 @@ export function createMiniAppServer(
             ? { dashboardUrl: `https://t.me/${botUsername}?start=dashboard` }
             : {}),
         });
-        if (result.status === 201) kickCountdowns();
+        if (result.status < 300 && typeof body === 'object' && body && 'action' in body &&
+            ['create', 'edit', 'cancel'].includes(String(body.action))) kickCountdowns();
         return;
       }
       if (request.method === 'POST' && isBirthday) {
@@ -802,6 +581,7 @@ export function createMiniAppServer(
 
   return {
     wakeHangouts,
+    wakeGroupUpdates: () => { kick(); kickCountdowns(); wakeHangouts(); },
     listen: () =>
       new Promise((resolveListen, rejectListen) => {
         server.once('error', rejectListen);

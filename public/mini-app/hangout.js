@@ -22,6 +22,8 @@ const dateFormat = new Intl.DateTimeFormat('en-GB', { dateStyle: 'medium', timeS
 let current = { view: 'menu' };
 let routeToken = 0;
 let busy = false;
+let refreshing = false;
+let lastViewData;
 let preview = false;
 let events;
 let dashboardUrl;
@@ -225,6 +227,8 @@ function renderEvent(event, route) {
   const invitation = route.view === 'preview';
   const heading = node('h2', invitation ? `🍕 ${event.title}` : event.title);
   const card = summary(event, heading);
+  if (event.delivery) card.append(node('p', 'Group invitation: ' +
+    ({ SENT: 'sent', UNKNOWN: 'delivery unconfirmed', FAILED: 'failed' }[event.delivery] ?? event.delivery.toLowerCase()), 'hangout-state'));
   if (event.description) card.append(node('p', event.description, 'hangout-description'));
   const state = node('p', '', 'hangout-state');
   state.setAttribute('role', 'status');
@@ -305,6 +309,7 @@ function renderForm(event) {
 
 async function open(view, options = {}, supplied) {
   const token = ++routeToken;
+  lastViewData = undefined;
   message();
   refreshState = undefined;
   form.hidden = true;
@@ -344,11 +349,13 @@ async function open(view, options = {}, supplied) {
       const pages = options.pages ?? [];
       const result = await run(view, { cursor: pages[pages.length - 1] });
       if (token !== routeToken) return;
+      lastViewData = JSON.stringify([result.hangouts, result.nextCursor]);
       renderList(result, view, pages);
     }
     if (['detail', 'member', 'preview'].includes(view)) {
       const event = supplied ?? (await run('detail', { id: options.id ?? 'pizza' }, view !== 'detail')).hangout;
       if (token !== routeToken) return;
+      lastViewData = JSON.stringify(event);
       renderEvent(event, current);
     }
     if (view === 'menu') {
@@ -432,6 +439,30 @@ document.addEventListener('visibilitychange', () => {
   }
   refreshState?.();
   void api('session').then(() => refreshState?.()).catch(() => {});
+});
+
+window.BoardUI.refreshVisible(async () => {
+  const { view, id, pages = [] } = current;
+  if (preview || busy || refreshing || !loading.hidden || !lastViewData ||
+      (view !== 'detail' && !listViews.includes(view))) return;
+  const token = routeToken;
+  refreshing = true;
+  try {
+    const result = await api(view, view === 'detail' ? { id } : { cursor: pages.at(-1) });
+    if (token !== routeToken || busy) return;
+    const value = JSON.stringify(view === 'detail' ? result.hangout : [result.hangouts, result.nextCursor]);
+    if (value === lastViewData) return;
+    lastViewData = value;
+    message();
+    content.replaceChildren();
+    refreshState = undefined;
+    if (view === 'detail') renderEvent(result.hangout, current);
+    else renderList(result, view, pages);
+  } catch {
+    if (token === routeToken && !busy) message('Could not refresh. This view may be out of date.');
+  } finally {
+    refreshing = false;
+  }
 });
 
 export async function initialize() {

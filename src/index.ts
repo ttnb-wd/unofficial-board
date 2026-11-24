@@ -46,7 +46,8 @@ async function main(): Promise<void> {
     await registerTestScope(database, telegram, config);
     if (stopping) return;
 
-    bot = createBot(config, database, identity.username, logger, () => miniAppServer?.wakeHangouts());
+    bot = createBot(config, database, identity.username, logger, () => miniAppServer?.wakeHangouts(),
+      () => miniAppServer?.wakeGroupUpdates());
     bot.botInfo = identity;
     miniAppServer = createMiniAppServer(config, database, bot.telegram, logger, identity.username);
     pollingRequested = true;

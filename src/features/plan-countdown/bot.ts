@@ -14,7 +14,7 @@ export function countdownKeyboard(config: AppConfig, id?: string) {
       if (id) target.searchParams.set('id', id);
       return [Markup.button.webApp(label, target.href)];
     };
-    if (id) rows.push(launch('View Countdown', 'detail'));
+    if (id) rows.push(launch('View Countdown', 'detail'), [Markup.button.callback('View in chat', 'ec:view:' + id)]);
     else {
       rows.push(launch('Create Countdown', 'create'), launch('Upcoming Countdowns', 'upcoming'), launch('My Events', 'mine'), launch('Completed Events', 'completed'));
       if (isOwnerPreview(config)) rows.push(launch('Preview Notifications', 'preview'), launch('Preview Member View', 'member'));

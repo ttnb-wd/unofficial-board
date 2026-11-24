@@ -28,12 +28,14 @@ function harness() {
     title, date: '2030-11-25', time: '13:30', timeZone: 'Asia/Yangon', requestId: randomUUID(), ...extra,
   });
   const sent = [];
-  const telegram = { callApi: async (_method, payload) => {
+  const edits = [];
+  const telegram = { callApi: async (method, payload) => {
+    if (method === 'editMessageText') { edits.push(payload); return true; }
     sent.push(payload);
     return { message_id: sent.length, date: Math.floor(+time / 1000) };
   } };
   return {
-    config, queue, request, sent, telegram,
+    config, queue, request, sent, edits, telegram,
     at: (iso) => { time = new Date(iso); },
     job: (countdownId, kind) => db.planCountdownDelivery.findUniqueOrThrow({ where: { countdownId_kind: { countdownId, kind } } }),
     run: (client = db, api = telegram) => deliverCountdowns(client, api, config, 'fixture_bot', clock),
@@ -136,6 +138,10 @@ describe.skipIf(!db)('Plan Countdown with isolated PostgreSQL', () => {
     }
     await pass;
     expect((await pendingEdit).status).toBe(200);
+    const announcement = await h.job(plan.id, 'ANNOUNCEMENT');
+    await h.run();
+    expect(h.edits[0]).toMatchObject({ chat_id: String(h.config.groupId), message_id: announcement.telegramMessageId,
+      text: expect.stringContaining('Updated plan') });
     expect((await h.job(plan.id, 'DAY_BEFORE')).status).toBe('SENT');
     expect((await h.job(plan.id, 'SIX_HOURS_BEFORE')).scheduledAt).toEqual(new Date('2030-11-26T01:00:00Z'));
     expect((await h.job(plan.id, 'AT_START')).scheduledAt).toEqual(new Date('2030-11-26T07:00:00Z'));
@@ -154,6 +160,8 @@ describe.skipIf(!db)('Plan Countdown with isolated PostgreSQL', () => {
     expect((await h.job(near.id, 'AT_START')).status).toBe('MISSED');
     expect((await h.job(ambiguous.id, 'ANNOUNCEMENT')).status).toBe('UNKNOWN');
     expect(h.sent).toHaveLength(2);
+    expect(h.edits[1]).toMatchObject({ chat_id: String(h.config.groupId), message_id: announcement.telegramMessageId,
+      text: expect.stringContaining('Cancelled plan') });
     expect((await h.request('mine')).body.plans.find(({ id }) => id === plan.id).cancelledAt).toBeTruthy();
   }, 30_000);
 });

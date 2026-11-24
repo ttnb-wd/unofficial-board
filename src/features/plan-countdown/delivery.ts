@@ -84,4 +84,39 @@ export async function deliverCountdowns(db: PrismaClient, telegram: Telegram, co
       });
     }, { maxWait: 10_000, timeout: 30_000 });
   }
+  const refresh = await db.planCountdownDelivery.findMany({
+    where: { countdown, kind: 'ANNOUNCEMENT', status: 'SENT', syncAt: { lte: now }, telegramMessageId: { not: null } },
+    select: { countdownId: true }, take: 10, orderBy: { syncAt: 'asc' },
+  });
+  for (const { countdownId } of refresh) {
+    await db.$transaction(async (tx) => {
+      await lockCountdown(tx, countdownId, config.groupId);
+      const item = await tx.planCountdownDelivery.findFirst({
+        where: { countdownId, countdown, kind: 'ANNOUNCEMENT', status: 'SENT', syncAt: { lte: now } },
+        include: { countdown: true },
+      });
+      if (!item || item.telegramMessageId === null) return;
+      const plan = item.countdown;
+      const text = plan.cancelledAt ? ('Cancelled plan · ' + plan.title)
+        : notification('ANNOUNCEMENT', plan.title, plan.startsAt, clock()).replace(/^New plan/, 'Updated plan');
+      let syncAt: Date | null = null;
+      try {
+        type Signal = NonNullable<NonNullable<Parameters<Telegram['callApi']>[2]>['signal']>;
+        await telegram.callApi('editMessageText', {
+          chat_id: groupDestination(config, plan.groupId), message_id: item.telegramMessageId, text,
+          reply_markup: { inline_keyboard: [[{
+            text: 'View Countdown', url: 'https://t.me/' + username + '?start=countdown_' + plan.id,
+          }]] },
+        }, { signal: AbortSignal.timeout(8_000) as unknown as Signal });
+      } catch (error) {
+        if (!(error instanceof TelegramError) || ![400, 401, 403, 404].includes(error.code)) {
+          const seconds = error instanceof TelegramError ? error.parameters?.retry_after ?? 60 : 60;
+          syncAt = new Date(+clock() + Math.max(60, seconds) * 1000);
+        }
+      }
+      await tx.planCountdownDelivery.update({ where: { countdownId_kind: { countdownId, kind: 'ANNOUNCEMENT' } },
+        data: { syncAt } });
+    }, { maxWait: 10_000, timeout: 15_000 });
+  }
+
 }
