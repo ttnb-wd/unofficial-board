@@ -81,6 +81,7 @@ model Member {
 }
 
 model TelegramGroup {
+  testOnly        Boolean           @default(false)
   telegramId      BigInt            @id
   isPrelaunchTest Boolean           @default(false)
   createdAt       DateTime          @default(now())
@@ -94,6 +95,7 @@ model TelegramGroup {
 }
 
 model GroupMembership {
+  testAuthorized  Boolean               @default(false)
   groupId         BigInt
   memberId        BigInt
   status          GroupMembershipStatus

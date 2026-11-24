@@ -200,7 +200,7 @@
       failure = '';
       const partial = !data.polls || !data.budgets || !data.birthday ||
         (!data.preview && (!data.plans || !data.hangouts || !data.birthdays || !data.bills || !data.debts));
-      notice(partial ? 'Some Board updates could not load. Try again.' : data.preview ? 'PRELAUNCH · Owner preview' : '', partial);
+      notice(partial ? 'Some Board updates could not load. Try again.' : data.preview ? 'PRELAUNCH · Owner preview' : data.testGroup ? 'Test group mode' : '', partial);
     } catch (error) {
       snapshot = undefined;
       failure = error instanceof Error && error.message.startsWith('Access could not be verified')

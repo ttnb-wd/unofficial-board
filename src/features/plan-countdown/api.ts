@@ -1,3 +1,4 @@
+import { isOwnerPreview } from '../../access/policy.js';
 import type { PlanCountdown, Prisma, PrismaClient } from '@prisma/client';
 import { z } from 'zod';
 import type { AppConfig } from '../../config.js';
@@ -25,8 +26,8 @@ const actionSchema = z.discriminatedUnion('action', [
   z.object({ action: z.literal('cancel'), id, version }),
 ]);
 
-export async function lockCountdown(tx: Prisma.TransactionClient, countdownId: string) {
-  await tx.$queryRaw`SELECT "id" FROM "PlanCountdown" WHERE "id" = ${countdownId} FOR UPDATE`;
+export async function lockCountdown(tx: Prisma.TransactionClient, countdownId: string, groupId: bigint) {
+  await tx.$queryRaw`SELECT "id" FROM "PlanCountdown" WHERE "id" = ${countdownId} AND "groupId" = ${groupId} FOR UPDATE`;
 }
 
 function present(plan: PlanCountdown, userId: bigint) {
@@ -54,7 +55,7 @@ export async function handleCountdownAction(input: unknown, userId: bigint, conf
   const parsed = actionSchema.safeParse(input);
   if (!parsed.success) return error(400, 'Check the plan details. Use Yangon time and a title up to 80 characters.');
   const action = parsed.data;
-  const preview = config.accessMode === 'PRELAUNCH';
+  const preview = isOwnerPreview(config);
   const ok = <T extends object>(body: T) => ({ status: 200, body: { serverNow: clock().toISOString(), ...body } });
   if (preview && userId !== config.prelaunchOwnerId) return error(403, 'Owner access is required.');
   if (action.action === 'session') {
@@ -114,7 +115,7 @@ export async function handleCountdownAction(input: unknown, userId: bigint, conf
       return { ...ok({ plan: present(plan, userId) }), status: 201 };
     }
 
-    await lockCountdown(tx, action.id);
+    await lockCountdown(tx, action.id, config.groupId);
     const plan = await tx.planCountdown.findFirst({ where: { ...scope, id: action.id } });
     if (!plan) return error(404, 'Countdown not found.');
     if (plan.creatorId !== userId) return error(403, 'Only the creator can change this countdown.');

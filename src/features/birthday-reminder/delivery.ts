@@ -1,7 +1,9 @@
+import { allowsGroupWorkflows, groupDestination } from '../../access/policy.js';
 import type { PrismaClient } from '@prisma/client';
 import { TelegramError } from 'telegraf';
 import type { Telegram } from 'telegraf';
 import type { AppConfig } from '../../config.js';
+import { isTestParticipant } from '../../access/membership.js';
 import { birthdayMember } from './api.js';
 import { announcement, dateKey, occurrence, yangonDate } from './rules.js';
 
@@ -9,7 +11,8 @@ const claimTimeoutMs = 5 * 60_000;
 const firstDeliveryHour = 9;
 
 export async function deliverBirthdays(db: PrismaClient, telegram: Telegram, config: AppConfig, clock = () => new Date()) {
-  if (config.accessMode !== 'LIVE') return;
+  if (!allowsGroupWorkflows(config)) return;
+  groupDestination(config, config.groupId);
 
   const now = clock();
   const today = yangonDate(now);
@@ -43,6 +46,12 @@ export async function deliverBirthdays(db: PrismaClient, telegram: Telegram, con
     if (dateKey(yangonDate(clock())) !== dateKey(today)) return;
     const key = { ...annual, memberId: item.memberId };
     const pending = { ...key, status: 'QUEUED' as const, nextAttemptAt: { lte: now } };
+    if (!await isTestParticipant(db, config, item.memberId)) {
+      await db.birthdayDelivery.updateMany({
+        where: pending, data: { nextAttemptAt: new Date(clock().getTime() + 15 * 60_000) },
+      });
+      continue;
+    }
     let member;
     try {
       member = await birthdayMember(telegram, scope.groupId, item.memberId);
@@ -76,7 +85,7 @@ export async function deliverBirthdays(db: PrismaClient, telegram: Telegram, con
     const mention = `<a href="tg://user?id=${item.memberId}">${name}</a>`;
     let messageId: number;
     try {
-      const sent = await telegram.sendMessage(String(scope.groupId), announcement(mention), { parse_mode: 'HTML' });
+      const sent = await telegram.sendMessage(groupDestination(config, item.groupId), announcement(mention), { parse_mode: 'HTML' });
       messageId = sent.message_id;
     } catch (error) {
       const code = error instanceof TelegramError ? error.code : undefined;

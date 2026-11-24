@@ -1,3 +1,4 @@
+import { allowsGroupWorkflows, isOwnerPreview } from '../../access/policy.js';
 import type { PrismaClient } from '@prisma/client';
 import { Markup } from 'telegraf';
 import type { Context, Telegraf } from 'telegraf';
@@ -20,7 +21,7 @@ export function hangoutKeyboard(config: AppConfig, id?: string) {
     else {
       rows.push(launch('Create Hangout', 'create'), launch('Active Hangouts', 'active'),
         launch('My Hangouts', 'mine'), launch('Completed Hangouts', 'completed'));
-      if (config.accessMode === 'PRELAUNCH') {
+      if (isOwnerPreview(config)) {
         rows.push(launch('Preview Group Invitation', 'preview'), launch('Preview Member View', 'member'));
       }
     }
@@ -45,7 +46,7 @@ export function registerHangoutMenu(
   bot.action(new RegExp(`^ho:([gmc]):(${hangoutIdPattern})$`), async (ctx) => {
     const receivedAt = new Date();
     const message = ctx.callbackQuery.message;
-    if (config.accessMode !== 'LIVE' || !ctx.chat || ctx.chat.type === 'private' ||
+    if (!allowsGroupWorkflows(config) || !ctx.chat || ctx.chat.type === 'private' ||
         BigInt(ctx.chat.id) !== config.groupId || !ctx.from || !message ||
         !await authorize(ctx, true)) {
       await ctx.answerCbQuery('Current group membership is required.', { show_alert: true });

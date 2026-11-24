@@ -1,3 +1,4 @@
+import { allowsGroupWorkflows, groupDestination, isOwnerPreview } from '../access/policy.js';
 import { Markup, TelegramError } from 'telegraf';
 import type { Context, Telegraf } from 'telegraf';
 import type { PrismaClient } from '@prisma/client';
@@ -68,8 +69,8 @@ export function registerVoting(
 
   async function showList(ctx: Context, kind: Kind, view: View, page: number) {
     if (!await allowed(ctx) || !ctx.from) return;
-    if ((view === 'group' && config.accessMode !== 'LIVE') ||
-        (view === 'samples' && (config.accessMode !== 'PRELAUNCH' || BigInt(ctx.from.id) !== config.prelaunchOwnerId))) {
+    if ((view === 'group' && !allowsGroupWorkflows(config)) ||
+        (view === 'samples' && (!isOwnerPreview(config) || BigInt(ctx.from.id) !== config.prelaunchOwnerId))) {
       await ctx.answerCbQuery('This view is unavailable.');
       return;
     }
@@ -106,7 +107,7 @@ export function registerVoting(
   function canView(ctx: Context, mode: Mode, record: VoteRecord) {
     if (mode === 'owner') return record.creatorId === BigInt(ctx.from!.id);
     if (mode === 'preview' || mode === 'sample') {
-      return config.accessMode === 'PRELAUNCH' && BigInt(ctx.from!.id) === config.prelaunchOwnerId &&
+      return isOwnerPreview(config) && BigInt(ctx.from!.id) === config.prelaunchOwnerId &&
         record.creatorId === config.prelaunchOwnerId && record.ready;
     }
     return canViewPublished(config, record);
@@ -139,14 +140,14 @@ export function registerVoting(
     }
     if (mode === 'owner') {
       const rows = [[button('Results', `${route}:r`)]];
-      if (config.accessMode === 'PRELAUNCH' && BigInt(ctx.from!.id) === config.prelaunchOwnerId && record.ready) {
+      if (isOwnerPreview(config) && BigInt(ctx.from!.id) === config.prelaunchOwnerId && record.ready) {
         rows.push([button('Group Publishing Preview', `${route}:g`)]);
         rows.push([button('Member View Preview', detailRoute(kind, 'preview', record.id, page))]);
       }
-      if (config.accessMode === 'LIVE' && !record.isPrelaunchTest && record.ready && record.status === 'DRAFT' && record.draftStep === 'SAVED') {
+      if (allowsGroupWorkflows(config) && !record.isPrelaunchTest && record.ready && record.status === 'DRAFT' && record.draftStep === 'SAVED') {
         rows.push([button('Publish to group', `${route}:p`)]);
       }
-      if (config.accessMode === 'LIVE' && published && record.status === 'OPEN') {
+      if (allowsGroupWorkflows(config) && published && record.status === 'OPEN') {
         rows.push([button('Close voting', kind === 'poll' && !record.custom ? `poll:close:${record.id}` : `${route}:c`)]);
       }
       return showScreen(ctx, [text, statusLabel(record.status, published), ...record.choices.map((choice) => choice.label)].join('\n'),
@@ -192,7 +193,7 @@ export function registerVoting(
     try {
       const { text, ...extra } = voteMessage(kind, record, botUsername);
       type Signal = NonNullable<NonNullable<Parameters<typeof ctx.telegram.callApi>[2]>['signal']>;
-      sent = await ctx.telegram.callApi('sendMessage', { chat_id: config.groupId.toString(), text, ...extra },
+      sent = await ctx.telegram.callApi('sendMessage', { chat_id: groupDestination(config, record.groupId), text, ...extra },
         { signal: AbortSignal.timeout(10_000) as unknown as Signal });
     } catch (error) {
       // A definite Telegram rejection permits a retry. A transport failure can have delivered the message.
@@ -206,7 +207,7 @@ export function registerVoting(
 
   bot.action(/^gv:(poll|bv):([a-z0-9]{1,30}):([0-9])$/, async (ctx) => {
     const message = ctx.callbackQuery.message;
-    if (config.accessMode !== 'LIVE' || !message || !ctx.from ||
+    if (!allowsGroupWorkflows(config) || !message || !ctx.from ||
         !ctx.chat || ctx.chat.type === 'private' || BigInt(ctx.chat.id) !== config.groupId ||
         !await authorize(ctx, true)) {
       await ctx.answerCbQuery('Current group membership is required.', { show_alert: true });
@@ -257,7 +258,7 @@ export function registerVoting(
     }
 
     if (action === 'g') {
-      const allowed = mode === 'owner' && config.accessMode === 'PRELAUNCH' &&
+      const allowed = mode === 'owner' && isOwnerPreview(config) &&
         BigInt(ctx.from.id) === config.prelaunchOwnerId && record.ready;
       await ctx.answerCbQuery(allowed ? undefined : 'Preview unavailable.');
       if (allowed) {
@@ -271,7 +272,7 @@ export function registerVoting(
 
     let notice: string | undefined;
     if (action === 'p' || action === 'c') {
-      if (mode !== 'owner' || config.accessMode !== 'LIVE' || record.isPrelaunchTest ||
+      if (mode !== 'owner' || !allowsGroupWorkflows(config) || record.isPrelaunchTest ||
           (action === 'p' && !record.ready) || (action === 'c' && ((kind === 'poll' && !record.custom) || record.telegramMessageId === null))) {
         await ctx.answerCbQuery('This action is unavailable.');
         return;

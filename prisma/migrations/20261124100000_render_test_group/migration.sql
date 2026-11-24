@@ -1,0 +1,6 @@
+BEGIN;
+
+ALTER TABLE "TelegramGroup" ADD COLUMN "testOnly" BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE "GroupMembership" ADD COLUMN "testAuthorized" BOOLEAN NOT NULL DEFAULT false;
+
+COMMIT;

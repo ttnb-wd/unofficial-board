@@ -1,3 +1,4 @@
+import { allowsGroupWorkflows } from '../../access/policy.js';
 import { loadVote, saveBallot } from '../vote-store.js';
 import type { PrismaClient } from '@prisma/client';
 import { Markup, Telegraf } from 'telegraf';
@@ -66,7 +67,7 @@ export function registerBudgetVoteHandlers(
 ): void {
   registerBudgetMiniAppLaunch(bot, config, authorize);
   const legacyGroupAccess = (ctx: Context) =>
-    config.accessMode === 'LIVE' &&
+    allowsGroupWorkflows(config) &&
     (ctx.chat?.type === 'group' || ctx.chat?.type === 'supergroup') &&
     authorize(ctx, true);
 
@@ -166,7 +167,7 @@ export function registerBudgetVoteHandlers(
   });
 
   bot.action(/^bv:close:([a-z0-9]+)$/, async (ctx) => {
-    if (config.accessMode !== 'LIVE' || !(await authorize(ctx)) || ctx.chat?.type !== 'private' || !ctx.from) {
+    if (!allowsGroupWorkflows(config) || !(await authorize(ctx)) || ctx.chat?.type !== 'private' || !ctx.from) {
       await ctx.answerCbQuery('Only the authorized creator can close this vote.', {
         show_alert: true,
       });

@@ -1,3 +1,4 @@
+import { allowsGroupWorkflows } from '../access/policy.js';
 import type { Prisma, PrismaClient } from '@prisma/client';
 import type { AppConfig } from '../config.js';
 
@@ -23,7 +24,7 @@ export function publishedVotes(groupId: bigint) {
 }
 
 export function canViewPublished(config: AppConfig, record: VoteRecord) {
-  return config.accessMode === 'LIVE' && !record.isPrelaunchTest &&
+  return allowsGroupWorkflows(config) && record.groupId === config.groupId && !record.isPrelaunchTest &&
     record.telegramMessageId !== null && ['OPEN', 'CLOSED'].includes(record.status);
 }
 

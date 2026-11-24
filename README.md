@@ -2,7 +2,7 @@
 
 The Unofficial Board is a production-first Telegram bot. It implements a
 fail-closed private PRELAUNCH mode, the Smart Poll and Group Budget Vote
-workflows, and scaffolds for the other confirmed features.
+workflows, Bill Splitter, Birthday Reminder, Plan Countdown, and One Tap Hangout.
 
 ## Requirements
 
@@ -12,61 +12,17 @@ workflows, and scaffolds for the other confirmed features.
 - The numeric ID of the configured Telegram group
 - The owner's numeric Telegram user ID
 
-## Configure private PRELAUNCH
+## Test on Render and Vercel
 
-Install dependencies and generate Prisma Client:
+Follow the [Render test group runbook](docs/RENDER-TEST-GROUP.md) for the
+existing bot, hosted Mini App, and Neon database. Set `ACCESS_MODE=PRELAUNCH`.
+With `TEST_GROUP_ENABLED=false`, only the owner can use PRELAUNCH and the
+bot has no group workflows. Enable the test flag after applying the additive
+migration and verifying the dedicated group.
 
-```powershell
-npm ci
-npm run db:generate
-```
-
-Set these values in the existing `.env` file:
-
-- `TELEGRAM_BOT_TOKEN`: the BotFather token; do not share or log it.
-- `TELEGRAM_GROUP_ID`: the configured group's numeric ID.
-- `PRELAUNCH_OWNER_TELEGRAM_ID`: your numeric Telegram user ID.
-- `ACCESS_MODE=PRELAUNCH`: keep this explicit during private testing. The
-  application also defaults to PRELAUNCH if the setting is omitted.
-- `DATABASE_URL`: the existing Neon connection URL with TLS enabled.
-- `MINI_APP_URL`: the HTTPS tunnel origin for local Telegram testing. Leave
-  it unset for same-origin HTTP development on loopback.
-- `SERVE_MINI_APP=true`: the default, which serves the forms locally.
-- `MINI_APP_PORT=3000`: the local port for the Mini App server; configure the
-  host or reverse proxy to forward requests to this port.
-- `LOG_LEVEL=info`: optional.
-
-The bot does not query or message the configured group in PRELAUNCH. Only the
-configured owner can use the private `/start` dashboard; other private users
-are denied. Polls and budget votes are saved to the real Neon database and
-marked as PRELAUNCH test records. PRELAUNCH access does not create a
-group-membership record.
-
-To run the bot and Mini App server locally:
-
-```powershell
-npm run dev
-```
-
-The Mini App needs a public HTTPS origin for Telegram to open it inside the
-private chat. Set `MINI_APP_URL` to that origin and route its requests to the
-Mini App server on `MINI_APP_PORT`. In Telegram, send `/start`, choose Smart
-Poll or Group Budget Vote, then tap **Create Poll** or **Create Budget Vote**.
-The embedded form provides editable question/title and choice fields, with
-three initial choices (and exact 10,000, 20,000, and 30,000 MMK defaults for a
-budget vote). **Done** saves to the existing Neon database. PRELAUNCH remains
-owner-only and does not send anything to the group.
-
-## Database migrations
-
-The poll and budget forms introduce no additional migration. The database must already
-have the repository’s existing migrations, including the exact-MMK and
-idempotency tables from `20261122181000_mini_app_exact_budget_amounts` and
-the draft states from `20261122190000_native_telegram_forms`. Check the
-existing Neon database with `npm run db:migrate:status`. If migrations are
-pending, review them and verify Neon recovery coverage before running
-`npm run db:migrate` once as a separate release step. Existing range-based
-votes and native form records are retained.
+For automated checks, install dependencies with `npm ci` and generate the
+Prisma Client with `npm run db:generate`. Use disposable PostgreSQL and
+mocked Telegram for integration tests.
 
 ## Render and Vercel deployment
 
@@ -98,20 +54,9 @@ API continues to use the existing Neon database. Migrations run separately.
   without a path. The build writes it into public `config.js`. Telegram
   and database credentials belong in Render.
 
-**Approved rollout**
-
-1. After approval, push the reviewed commit to the branch used by the
-   existing Render and Vercel projects. Check the existing Neon migration
-   history with `npm run db:migrate:status`. This release adds no migration.
-2. Deploy the commit to the existing Render service. Keep
-   `ACCESS_MODE=PRELAUNCH`, the existing database, and the existing Telegram
-   settings. Verify `/healthz` and the Vercel origin allowed by API CORS.
-3. Deploy the same commit to the existing Vercel project with its Render
-   `MINI_APP_API_ORIGIN`. Verify both form routes on the stable HTTPS origin.
-4. In the owner's private Telegram chat, open a fresh `/menu`. Tap each
-   Create button once, save both forms, open their details and results,
-   and submit both member simulations. Check **Back** and **Main Menu**
-   along the way.
+Apply pending migrations as a separate release step, then follow the
+[Render test group runbook](docs/RENDER-TEST-GROUP.md) for deployment,
+disablement, and Telegram acceptance.
 
 **Render Free behavior**
 
@@ -146,7 +91,7 @@ Reply-keyboard Web Apps receive empty `initData`, so the reply options send a
 message to the bot and return an authenticated inline shortcut to the feature.
 The inline menu itself opens feature homes in one tap.
 
-Before rollout, check this on a real iPhone using an isolated PRELAUNCH bot
+Before rollout, check this on a real iPhone using the existing bot
 in the owner's private chat. Run both commands, switch to normal typing, and
 reopen options with the keyboard icon. Select each option, check that it hides
 the options and returns the matching inline shortcut, then open that shortcut.

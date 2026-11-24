@@ -9,7 +9,7 @@ const config: AppConfig = {
 };
 const id = 'budget1';
 const budget = {
-  id, creatorId: 42n, title: 'Next trip budget', status: 'OPEN', telegramMessageId: 75,
+  id, groupId: config.groupId, creatorId: 42n, title: 'Next trip budget', status: 'OPEN', telegramMessageId: 75,
   isPrelaunchTest: false, ranges: [],
   options: [
     { id: 'one', amountMmk: 10000n, _count: { ballots: 3 } },

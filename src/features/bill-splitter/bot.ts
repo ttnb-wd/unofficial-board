@@ -1,3 +1,4 @@
+import { allowsGroupWorkflows } from '../../access/policy.js';
 import { Markup } from 'telegraf';
 import type { Context, Telegraf } from 'telegraf';
 import type { AppConfig } from '../../config.js';
@@ -30,7 +31,7 @@ export function registerBillMenus(bot: Telegraf, config: AppConfig, authorize: (
   bot.action('feature:bill-splitter', (ctx) => menu(ctx));
   bot.start(async (ctx, next) => {
     if (!ctx.payload.startsWith('bill_')) return next();
-    if (config.accessMode !== 'LIVE') return;
+    if (!allowsGroupWorkflows(config)) return;
     const view = ctx.payload.slice(5);
     if (view === 'ledger' || recordId.safeParse(view).success) {
       await menu(ctx, view === 'ledger' ? view : `bill:${view}`);

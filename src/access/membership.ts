@@ -1,5 +1,34 @@
 import type { PrismaClient } from '@prisma/client';
 import type { Telegram } from 'telegraf';
+import type { AppConfig } from '../config.js';
+import { groupDestination, isOwnerPreview } from './policy.js';
+
+export function testParticipantFilter(config: AppConfig) {
+  return config.testGroup ? { OR: [
+    { testAuthorized: true }, { memberId: config.prelaunchOwnerId },
+  ] } : {};
+}
+
+export async function isTestParticipant(db: PrismaClient, config: AppConfig, memberId: bigint) {
+  if (!config.testGroup || memberId === config.prelaunchOwnerId) return true;
+  const entry = await db.groupMembership.findUnique({
+    where: { groupId_memberId: { groupId: config.groupId, memberId } },
+    select: { testAuthorized: true },
+  });
+  return entry?.testAuthorized === true;
+}
+
+export async function canAccessBoard(
+  telegram: Telegram, db: PrismaClient, config: AppConfig, memberId: bigint, privateChat: boolean,
+) {
+  if (isOwnerPreview(config)) return privateChat && memberId === config.prelaunchOwnerId;
+  if (config.testGroup) {
+    groupDestination(config, config.groupId);
+    if (privateChat && memberId === config.prelaunchOwnerId) return true;
+    if (!await isTestParticipant(db, config, memberId)) return false;
+  }
+  return verifyAndRecordMembership(telegram, db, config.groupId, memberId, Boolean(config.testGroup));
+}
 
 const persistedMembershipStatus = {
   creator: 'CREATOR',
@@ -47,12 +76,14 @@ export async function verifyAndRecordMembership(
   database: PrismaClient,
   groupId: bigint,
   memberId: bigint,
+  requireHuman = false,
 ): Promise<boolean> {
   const memberStatus = await telegram.getChatMember(
     groupId.toString(),
     Number(memberId),
   );
-  if (!hasActiveMembership(memberStatus)) {
+  if (!hasActiveMembership(memberStatus) || (requireHuman &&
+      (memberStatus.user?.id !== Number(memberId) || memberStatus.user.is_bot))) {
     return false;
   }
 

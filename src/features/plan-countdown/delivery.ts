@@ -1,3 +1,4 @@
+import { allowsGroupWorkflows, groupDestination } from '../../access/policy.js';
 import type { CountdownDeliveryStatus, PrismaClient } from '@prisma/client';
 import { TelegramError } from 'telegraf';
 import type { Telegram } from 'telegraf';
@@ -6,7 +7,8 @@ import { lockCountdown } from './api.js';
 import { notification } from './rules.js';
 
 export async function deliverCountdowns(db: PrismaClient, telegram: Telegram, config: AppConfig, username: string, clock = () => new Date()) {
-  if (config.accessMode !== 'LIVE') return;
+  if (!allowsGroupWorkflows(config)) return;
+  groupDestination(config, config.groupId);
 
   const now = clock();
   const countdown = { groupId: config.groupId };
@@ -26,25 +28,25 @@ export async function deliverCountdowns(db: PrismaClient, telegram: Telegram, co
 
   for (const key of jobs) {
     await db.$transaction(async (tx) => {
-      await lockCountdown(tx, key.countdownId);
-      const job = await tx.planCountdownDelivery.findUnique({
-        where: { countdownId_kind: key }, include: { countdown: true },
+      await lockCountdown(tx, key.countdownId, config.groupId);
+      const job = await tx.planCountdownDelivery.findFirst({
+        where: { ...key, countdown }, include: { countdown: true },
       });
       const attemptAt = clock();
       if (!job || job.status !== 'QUEUED' || job.scheduledAt > attemptAt || job.nextAttemptAt > attemptAt || job.expiresAt <= attemptAt) return;
       const plan = job.countdown;
-      if (plan.cancelledAt) return;
+      if (plan.groupId !== config.groupId || plan.cancelledAt) return;
 
       // Commit the claim independently while the parent row prevents concurrent edits.
       const claimed = await db.planCountdownDelivery.updateMany({
-        where: { ...key, status: 'QUEUED', expiresAt: { gt: attemptAt } },
+        where: { ...key, countdown, status: 'QUEUED', expiresAt: { gt: attemptAt } },
         data: { status: 'SENDING', attemptAt, attempts: { increment: 1 } },
       });
       if (!claimed.count) return;
       const publishedAt = clock();
       if (job.expiresAt <= publishedAt || (key.kind !== 'AT_START' && plan.startsAt <= publishedAt)) {
         await db.planCountdownDelivery.updateMany({
-          where: { ...key, status: 'SENDING', attemptAt },
+          where: { ...key, countdown, status: 'SENDING', attemptAt },
           data: { status: 'MISSED' },
         });
         return;
@@ -55,7 +57,7 @@ export async function deliverCountdowns(db: PrismaClient, telegram: Telegram, co
       let delivery: { telegramMessageId: number; deliveredAt: Date } | undefined;
       try {
         const sent = await telegram.callApi('sendMessage', {
-          chat_id: String(config.groupId),
+          chat_id: groupDestination(config, plan.groupId),
           text: notification(key.kind, plan.title, plan.startsAt, publishedAt, job.startVariant),
           reply_markup: { inline_keyboard: [[{
             text: 'View Countdown', url: `https://t.me/${username}?start=countdown_${plan.id}`,
@@ -77,7 +79,7 @@ export async function deliverCountdowns(db: PrismaClient, telegram: Telegram, co
         }
       }
       await db.planCountdownDelivery.updateMany({
-        where: { ...key, status: { in: ['SENDING', 'UNKNOWN'] }, attemptAt },
+        where: { ...key, countdown, status: { in: ['SENDING', 'UNKNOWN'] }, attemptAt },
         data: { status, nextAttemptAt, ...delivery },
       });
     }, { maxWait: 10_000, timeout: 30_000 });

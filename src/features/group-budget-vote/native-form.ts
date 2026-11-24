@@ -1,3 +1,4 @@
+import { allowsGroupWorkflows, isOwnerPreview } from '../../access/policy.js';
 import { randomBytes } from 'node:crypto';
 import type { Prisma, PrismaClient } from '@prisma/client';
 import { Markup, Telegraf } from 'telegraf';
@@ -28,7 +29,7 @@ function createKeyboard(config: AppConfig) {
   return Markup.inlineKeyboard([
     ...(miniAppUrl ? [[Markup.button.webApp('Create Budget Vote', miniAppUrl)]] : []),
     [Markup.button.callback('My budget votes', 'bv:list')],
-    ...(config.accessMode === 'LIVE'
+    ...(allowsGroupWorkflows(config)
       ? [[Markup.button.callback('Published votes', 'vote:bv:group')]]
       : [[Markup.button.callback('Member View Preview', 'vote:bv:samples')]]),
     navigationRow('nav:home'),
@@ -116,11 +117,12 @@ class FormInputError extends Error {}
 
 async function loadVote(
   database: PrismaClient,
+  config: AppConfig,
   voteId: string,
   creatorId: bigint,
 ) {
   return database.budgetVote.findFirst({
-    where: { id: voteId, creatorId },
+    where: { groupId: config.groupId, id: voteId, creatorId },
     include: {
       options: { orderBy: { position: 'asc' } },
       ranges: { orderBy: { position: 'asc' } },
@@ -148,11 +150,12 @@ async function createOptions(
 async function showPrompt(
   ctx: Context,
   database: PrismaClient,
+  config: AppConfig,
   voteId: string,
   creatorId: bigint,
   text: string,
 ): Promise<void> {
-  const vote = await loadVote(database, voteId, creatorId);
+  const vote = await loadVote(database, config, voteId, creatorId);
   if (!vote || vote.status !== 'DRAFT') {
     await ctx.reply('This budget vote draft is no longer available.');
     return;
@@ -176,13 +179,13 @@ async function showPrompt(
   } else {
     const message = await ctx.reply(text, promptKeyboard(vote.id));
     await database.budgetVote.updateMany({
-      where: { id: vote.id, creatorId, status: 'DRAFT' },
+      where: { groupId: config.groupId, id: vote.id, creatorId, status: 'DRAFT' },
       data: { promptMessageId: message.message_id },
     });
     return;
   }
   await database.budgetVote.updateMany({
-    where: { id: vote.id, creatorId, status: 'DRAFT' },
+    where: { groupId: config.groupId, id: vote.id, creatorId, status: 'DRAFT' },
     data: { promptMessageId: messageId },
   });
 }
@@ -190,10 +193,11 @@ async function showPrompt(
 async function showPreview(
   ctx: Context,
   database: PrismaClient,
+  config: AppConfig,
   voteId: string,
   creatorId: bigint,
 ): Promise<void> {
-  const vote = await loadVote(database, voteId, creatorId);
+  const vote = await loadVote(database, config, voteId, creatorId);
   if (!vote) {
     await ctx.reply('This budget vote draft is no longer available.');
     return;
@@ -224,13 +228,13 @@ async function showPreview(
       previewKeyboard(vote.id, vote.draftStep === 'SAVED'),
     );
     await database.budgetVote.updateMany({
-      where: { id: vote.id, creatorId, status: vote.status },
+      where: { groupId: config.groupId, id: vote.id, creatorId, status: vote.status },
       data: { promptMessageId: message.message_id },
     });
     return;
   }
   await database.budgetVote.updateMany({
-    where: { id: vote.id, creatorId, status: vote.status },
+    where: { groupId: config.groupId, id: vote.id, creatorId, status: vote.status },
     data: { promptMessageId: messageId },
   });
 }
@@ -241,12 +245,12 @@ async function createOrResumeDraft(
   creatorId: bigint,
 ) {
   return database.$transaction(async (transaction) => {
-    const lockKey = `native-form:${creatorId}`;
+    const lockKey = `native-form:${config.groupId}:${creatorId}`;
     await transaction.$executeRaw`
       SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))
     `;
     const existing = await transaction.budgetVote.findFirst({
-      where: { creatorId, status: 'DRAFT' },
+      where: { groupId: config.groupId, creatorId, status: 'DRAFT' },
       include: {
         options: { orderBy: { position: 'asc' } },
         ranges: { orderBy: { position: 'asc' } },
@@ -260,7 +264,7 @@ async function createOrResumeDraft(
       where: { telegramId: config.groupId },
       create: {
         telegramId: config.groupId,
-        isPrelaunchTest: config.accessMode === 'PRELAUNCH',
+        isPrelaunchTest: isOwnerPreview(config),
       },
       update: {},
     });
@@ -268,7 +272,7 @@ async function createOrResumeDraft(
       where: { telegramId: creatorId },
       create: {
         telegramId: creatorId,
-        isPrelaunchTest: config.accessMode === 'PRELAUNCH',
+        isPrelaunchTest: isOwnerPreview(config),
       },
       update: {},
     });
@@ -276,7 +280,7 @@ async function createOrResumeDraft(
       data: {
         groupId: config.groupId,
         creatorId,
-        isPrelaunchTest: config.accessMode === 'PRELAUNCH',
+        isPrelaunchTest: isOwnerPreview(config),
       },
       include: {
         options: { orderBy: { position: 'asc' } },
@@ -289,15 +293,17 @@ async function createOrResumeDraft(
 async function showCurrentDraft(
   ctx: Context,
   database: PrismaClient,
+  config: AppConfig,
   vote: NonNullable<Awaited<ReturnType<typeof loadVote>>>,
   creatorId: bigint,
 ): Promise<void> {
   if (vote.draftStep === 'SAVED' || vote.draftStep === 'READY') {
-    await showPreview(ctx, database, vote.id, creatorId);
+    await showPreview(ctx, database, config, vote.id, creatorId);
   } else {
     await showPrompt(
       ctx,
       database,
+      config,
       vote.id,
       creatorId,
       vote.draftStep === 'TITLE'
@@ -314,7 +320,7 @@ async function openBudgetDraft(
   creatorId: bigint,
 ): Promise<void> {
   const vote = await createOrResumeDraft(database, config, creatorId);
-  await showCurrentDraft(ctx, database, vote, creatorId);
+  await showCurrentDraft(ctx, database, config, vote, creatorId);
 }
 
 async function showStaleDraftNotice(ctx: Context): Promise<void> {
@@ -386,6 +392,7 @@ export function registerNativeBudgetFormHandlers(
       const source = sourceId
         ? await database.smartPoll.findFirst({
             where: {
+              groupId: config.groupId,
               id: sourceId,
               creatorId: BigInt(ctx.from.id),
               status: 'DRAFT',
@@ -411,14 +418,14 @@ export function registerNativeBudgetFormHandlers(
     }
     const voteId = ctx.match[1];
     const vote = voteId
-      ? await loadVote(database, voteId, BigInt(ctx.from.id))
+      ? await loadVote(database, config, voteId, BigInt(ctx.from.id))
       : null;
     if (!vote || vote.status !== 'DRAFT') {
       await showStaleDraftNotice(ctx);
       return;
     }
     await ctx.answerCbQuery();
-    await showCurrentDraft(ctx, database, vote, BigInt(ctx.from.id));
+    await showCurrentDraft(ctx, database, config, vote, BigInt(ctx.from.id));
   });
 
   bot.action(/^bv:(edit-title|edit-amounts):([a-z0-9]+)$/, async (ctx) => {
@@ -439,6 +446,7 @@ export function registerNativeBudgetFormHandlers(
     const draftStep = action === 'edit-title' ? 'TITLE' : 'RANGES';
     const claimed = await database.budgetVote.updateMany({
       where: {
+        groupId: config.groupId,
         id: voteId,
         creatorId: BigInt(ctx.from.id),
         status: 'DRAFT',
@@ -456,6 +464,7 @@ export function registerNativeBudgetFormHandlers(
     await showPrompt(
       ctx,
       database,
+      config,
       voteId,
       BigInt(ctx.from.id),
       action === 'edit-title'
@@ -473,7 +482,7 @@ export function registerNativeBudgetFormHandlers(
     }
     const voteId = ctx.match[1];
     const vote = voteId
-      ? await loadVote(database, voteId, BigInt(ctx.from.id))
+      ? await loadVote(database, config, voteId, BigInt(ctx.from.id))
       : null;
     if (!vote || vote.status !== 'DRAFT') {
       await ctx.answerCbQuery('This budget vote draft is no longer available.', {
@@ -487,7 +496,7 @@ export function registerNativeBudgetFormHandlers(
       return;
     }
     await database.budgetVote.updateMany({
-      where: { id: vote.id, creatorId: BigInt(ctx.from.id), status: 'DRAFT' },
+      where: { groupId: config.groupId, id: vote.id, creatorId: BigInt(ctx.from.id), status: 'DRAFT' },
       data: { draftStep: 'READY' },
     });
     await ctx.answerCbQuery();
@@ -506,7 +515,7 @@ export function registerNativeBudgetFormHandlers(
     }
     const voteId = ctx.match[1];
     const vote = voteId
-      ? await loadVote(database, voteId, BigInt(ctx.from.id))
+      ? await loadVote(database, config, voteId, BigInt(ctx.from.id))
       : null;
     if (
       !vote ||
@@ -520,9 +529,10 @@ export function registerNativeBudgetFormHandlers(
       });
       return;
     }
-    const status = config.accessMode === 'PRELAUNCH' ? 'PRELAUNCH_OPEN' : 'DRAFT';
+    const status = isOwnerPreview(config) ? 'PRELAUNCH_OPEN' : 'DRAFT';
     const claimed = await database.budgetVote.updateMany({
       where: {
+        groupId: config.groupId,
         id: vote.id,
         creatorId: BigInt(ctx.from.id),
         status: 'DRAFT',
@@ -537,7 +547,7 @@ export function registerNativeBudgetFormHandlers(
       return;
     }
     await ctx.answerCbQuery('Budget vote saved.');
-    if (config.accessMode === 'PRELAUNCH') {
+    if (isOwnerPreview(config)) {
       const text = renderPreview(vote.title, vote.options);
       await ctx.editMessageText(
         `Saved privately. This vote has not been sent to the group.\n\n${text}`,
@@ -572,6 +582,7 @@ export function registerNativeBudgetFormHandlers(
     const cancelled = voteId
       ? await database.budgetVote.updateMany({
           where: {
+            groupId: config.groupId,
             id: voteId,
             creatorId: BigInt(ctx.from.id),
             status: 'DRAFT',
@@ -605,6 +616,7 @@ export function registerNativeBudgetFormHandlers(
     const creatorId = BigInt(ctx.from.id);
     const vote = await database.budgetVote.findFirst({
       where: {
+        groupId: config.groupId,
         creatorId,
         status: 'DRAFT',
         draftStep: { in: ['TITLE', 'RANGES'] },
@@ -614,6 +626,7 @@ export function registerNativeBudgetFormHandlers(
     });
     const poll = await database.smartPoll.findFirst({
       where: {
+        groupId: config.groupId,
         creatorId,
         status: 'DRAFT',
         draftStep: {
@@ -634,6 +647,7 @@ export function registerNativeBudgetFormHandlers(
         const updated = await database.$transaction(async (transaction) => {
           const claimed = await transaction.budgetVote.updateMany({
             where: {
+              groupId: config.groupId,
               id: vote.id,
               creatorId,
               status: 'DRAFT',
@@ -656,7 +670,7 @@ export function registerNativeBudgetFormHandlers(
           await ctx.reply('This budget vote step has already been completed.');
           return;
         }
-        await showPreview(ctx, database, vote.id, creatorId);
+        await showPreview(ctx, database, config, vote.id, creatorId);
         return;
       }
 
@@ -664,6 +678,7 @@ export function registerNativeBudgetFormHandlers(
       const updated = await database.$transaction(async (transaction) => {
         const claimed = await transaction.budgetVote.updateMany({
           where: {
+            groupId: config.groupId,
             id: vote.id,
             creatorId,
             status: 'DRAFT',
@@ -684,7 +699,7 @@ export function registerNativeBudgetFormHandlers(
         await ctx.reply('This budget vote step has already been completed.');
         return;
       }
-      await showPreview(ctx, database, vote.id, creatorId);
+      await showPreview(ctx, database, config, vote.id, creatorId);
     } catch (error) {
       if (error instanceof FormInputError) {
         await ctx.reply(error.message, promptKeyboard(vote.id));

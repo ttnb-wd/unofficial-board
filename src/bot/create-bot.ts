@@ -3,8 +3,8 @@ import { Markup, Telegraf } from 'telegraf';
 import type { Context } from 'telegraf';
 import type { AppConfig } from '../config.js';
 import { isAuthorizedFeatureContext } from '../access/authorization.js';
-import { verifyAndRecordMembership } from '../access/membership.js';
-import { hasPrelaunchAccess } from '../access/policy.js';
+import { canAccessBoard, verifyAndRecordMembership } from '../access/membership.js';
+import { allowsGroupWorkflows, groupDestination, isOwnerPreview } from '../access/policy.js';
 import { registerBudgetVoteHandlers } from '../features/group-budget-vote/bot.js';
 import { findFeature, features } from '../features/index.js';
 import { registerSmartPollHandlers } from '../features/smart-poll/bot.js';
@@ -54,10 +54,48 @@ export function createBot(
   }
 
   bot.use(async (ctx, next) => {
-    if (config.accessMode === 'PRELAUNCH' && ctx.chat?.type !== 'private') {
+    if (isOwnerPreview(config) && ctx.chat?.type !== 'private') return;
+    if (config.testGroup && ctx.chat && ctx.chat.type !== 'private' &&
+        (!['group', 'supergroup'].includes(ctx.chat.type) || BigInt(ctx.chat.id) !== config.groupId)) return;
+    await next();
+  });
+
+  async function showGroupEntry(ctx: Context) {
+    if (!await authorize(ctx, true)) return;
+    groupDestination(config, BigInt(ctx.chat!.id));
+    await ctx.reply(
+      'Open the private bot chat to access the group dashboard.',
+      Markup.inlineKeyboard([[
+        Markup.button.url('Open private dashboard', `https://t.me/${botUsername}?start=dashboard`),
+      ]]),
+    );
+  }
+
+  bot.command('test_group', async (ctx) => {
+    if (!config.testGroup || BigInt(ctx.from.id) !== config.prelaunchOwnerId ||
+        ctx.chat.type === 'private' || !await authorize(ctx, true)) return;
+    const destination = groupDestination(config, BigInt(ctx.chat.id));
+    await ctx.reply(`Test group active (${destination}). Access mode is ${config.accessMode}.`);
+  });
+
+  bot.command(['test_allow', 'test_revoke'], async (ctx) => {
+    if (!config.testGroup || ctx.chat.type !== 'private' || BigInt(ctx.from.id) !== config.prelaunchOwnerId) return;
+    const memberId = /^[1-9]\d{0,15}$/.test(ctx.payload) ? BigInt(ctx.payload) : 0n;
+    if (memberId === 0n || memberId > BigInt(Number.MAX_SAFE_INTEGER) || memberId === config.prelaunchOwnerId) {
+      await ctx.reply('Enter a participant’s numeric Telegram user ID after the command.');
       return;
     }
-    await next();
+    const groupId = config.groupId;
+    groupDestination(config, groupId);
+    const allow = ctx.command === 'test_allow';
+    if (allow && !await verifyAndRecordMembership(ctx.telegram, database, groupId, memberId, true)) {
+      await ctx.reply('This user must be a current test group member.');
+      return;
+    }
+    const result = await database.groupMembership.updateMany({
+      where: { groupId, memberId }, data: { testAuthorized: allow },
+    });
+    await ctx.reply(allow && result.count === 1 ? 'Test access granted.' : 'Test access is off for this user.');
   });
 
   bot.command('menu', async (ctx) => {
@@ -75,43 +113,7 @@ export function createBot(
       return;
     }
 
-    if (
-      config.accessMode !== 'LIVE' ||
-      BigInt(ctx.chat.id) !== config.groupId ||
-      !ctx.from
-    ) {
-      return;
-    }
-
-    try {
-      const active = await verifyAndRecordMembership(
-        ctx.telegram,
-        database,
-        config.groupId,
-        BigInt(ctx.from.id),
-      );
-      if (!active) {
-        return;
-      }
-    } catch (error) {
-      logger.warn(
-        { errorName: errorName(error), operation: 'group-menu-membership-check' },
-        'Group member verification failed',
-      );
-      return;
-    }
-
-    await ctx.reply(
-      'Open the private bot chat to access the group dashboard.',
-      Markup.inlineKeyboard([
-        [
-          Markup.button.url(
-            'Open private dashboard',
-            `https://t.me/${botUsername}?start=dashboard`,
-          ),
-        ],
-      ]),
-    );
+    await showGroupEntry(ctx);
   });
 
   registerBillMenus(bot, config, authorize);
@@ -121,7 +123,8 @@ export function createBot(
   registerVoting(bot, config, database, botUsername, authorize);
 
   bot.start(async (ctx) => {
-    if (ctx.chat.type !== 'private' || !ctx.from) {
+    if (ctx.chat.type !== 'private') {
+      if (config.testGroup) await showGroupEntry(ctx);
       return;
     }
 
@@ -136,13 +139,13 @@ export function createBot(
     }
 
     const hangoutId = /^hangout_([A-Za-z0-9_-]{1,48})$/.exec(ctx.startPayload)?.[1];
-    if (hangoutId && config.accessMode === 'LIVE') {
+    if (hangoutId && allowsGroupWorkflows(config)) {
       await ctx.reply('Hangout Details', hangoutKeyboard(config, hangoutId));
       return;
     }
 
     const countdownId = /^countdown_([0-9a-f-]{36})$/.exec(ctx.startPayload)?.[1];
-    if (countdownId && config.accessMode === 'LIVE') {
+    if (countdownId && allowsGroupWorkflows(config)) {
       await ctx.reply('Plan Countdown', countdownKeyboard(config, countdownId));
       return;
     }
@@ -181,11 +184,11 @@ export function createBot(
     const creatorId = BigInt(ctx.from.id);
     const [polls, votes] = await database.$transaction([
       database.smartPoll.updateMany({
-        where: { creatorId, status: 'DRAFT', draftStep: { not: 'SAVED' } },
+        where: { groupId: config.groupId, creatorId, status: 'DRAFT', draftStep: { not: 'SAVED' } },
         data: { status: 'CANCELLED' },
       }),
       database.budgetVote.updateMany({
-        where: { creatorId, status: 'DRAFT', draftStep: { not: 'SAVED' } },
+        where: { groupId: config.groupId, creatorId, status: 'DRAFT', draftStep: { not: 'SAVED' } },
         data: { status: 'CANCELLED' },
       }),
     ]);
@@ -265,25 +268,7 @@ async function checkPrivateAccess(
   }
 
   try {
-    if (
-      hasPrelaunchAccess(
-        config.accessMode,
-        config.prelaunchOwnerId,
-        BigInt(ctx.from.id),
-      )
-    ) {
-      return 'active';
-    }
-    if (config.accessMode !== 'LIVE') {
-      return 'inactive';
-    }
-
-    const active = await verifyAndRecordMembership(
-      ctx.telegram,
-      database,
-      config.groupId,
-      BigInt(ctx.from.id),
-    );
+    const active = await canAccessBoard(ctx.telegram, database, config, BigInt(ctx.from.id), true);
     return active ? 'active' : 'inactive';
   } catch (error) {
     logger.warn(

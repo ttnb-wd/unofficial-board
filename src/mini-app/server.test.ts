@@ -1,14 +1,24 @@
 import { createHmac } from 'node:crypto';
 import { createServer as createNetServer } from 'node:net';
-import { randomUUID } from 'node:crypto';
+import { randomInt, randomUUID } from 'node:crypto';
 import { PrismaClient } from '@prisma/client';
 import { Telegram } from 'telegraf';
+import sharp from 'sharp';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { AppConfig } from '../config.js';
 import { createLogger } from '../logger.js';
 import type { Update } from 'telegraf/types';
 import { createBot } from '../bot/create-bot.js';
 import { refreshGroupMessages } from '../features/group-message.js';
+import { deliverBirthdays } from '../features/birthday-reminder/delivery.js';
+import { deliverCountdowns } from '../features/plan-countdown/delivery.js';
+import { handleCountdownAction } from '../features/plan-countdown/api.js';
+import { deliverHangouts } from '../features/one-tap-hangout/delivery.js';
+import { handleHangoutAction } from '../features/one-tap-hangout/api.js';
+import { deliverBills } from '../features/bill-splitter/delivery.js';
+import { createBillInput } from '../features/bill-splitter/rules.js';
+import { createBill, submitPayment } from '../features/bill-splitter/ledger.js';
+import { registerTestScope, verifyDatabaseScope } from '../startup.js';
 import { createMiniAppServer } from './server.js';
 
 const config: AppConfig = {
@@ -333,7 +343,7 @@ describe('Mini App API', () => {
     const port = await getFreePort();
     const submissions = new Map<
       string,
-      { creatorId: bigint; feature: string; resourceId: string }
+      { creatorId: bigint; feature: string; resourceId: string; groupId: bigint }
     >();
     const transaction = {
       $executeRaw: vi.fn(
@@ -346,7 +356,7 @@ describe('Mini App API', () => {
             const requestId = String(values[0]);
             const creatorId = BigInt(values[1] as bigint);
             const resourceId = String(values[2]);
-            submissions.set(requestId, { creatorId, feature, resourceId });
+            submissions.set(requestId, { creatorId, feature, resourceId, groupId: config.groupId });
           }
           return 1;
         },
@@ -558,6 +568,257 @@ describe.skipIf(!boardTestUrl)('shared Telegram and Mini App activity on isolate
       expect(dashboard.budgets).toEqual([expect.objectContaining({ title: 'Fixture bv' })]);
     } finally {
       await server.close();
+      await db.$disconnect();
+      vi.restoreAllMocks();
+    }
+  }, 30_000);
+});
+
+describe.skipIf(!boardTestUrl)('Render test group on isolated PostgreSQL', () => {
+  it('runs all six features and keeps original records, queues and destinations out of test mode', async () => {
+    const db = new PrismaClient({ datasourceUrl: boardTestUrl! });
+    const groupId = -BigInt(randomInt(1_000_000, 1_000_000_000));
+    const originalGroupId = groupId - 1_000_000_000n;
+    const original = { ...config, groupId: originalGroupId, accessMode: 'LIVE' as const, miniAppPort: await getFreePort() };
+    const test = { ...config, groupId, testGroup: { id: groupId, originalGroupId }, miniAppPort: await getFreePort() };
+    const logger = createLogger('silent');
+    const bot = createBot(test, db, 'test_bot', logger);
+    const disabled = createBot({ ...config, groupId: originalGroupId }, db, 'test_bot', logger);
+    let messageId = 100;
+    let updateId = 1000;
+    const groupMembers = new Set([42, 73, 84, 85, 86]);
+    const calls = vi.spyOn(Telegram.prototype, 'callApi').mockImplementation(async (method, payload) => {
+      if (method === 'getChatMember') {
+        const { chat_id, user_id } = payload as { chat_id: string; user_id: number };
+        return {
+          status: chat_id === String(originalGroupId) || groupMembers.has(user_id) ? 'member' : 'left',
+          user: { id: user_id, first_name: `Member ${user_id}`, is_bot: false },
+        } as never;
+      }
+      return { message_id: ++messageId, date: Math.floor(Date.now() / 1000) } as never;
+    });
+    bot.botInfo = disabled.botInfo = {
+      id: 123456, is_bot: true, first_name: 'Test', username: 'test_bot',
+      can_join_groups: true, can_read_all_group_messages: false, supports_inline_queries: false,
+    };
+    const server = createMiniAppServer(test, db, bot.telegram, logger);
+    const originalServer = createMiniAppServer(original, db, bot.telegram, logger);
+    const from = (id: number) => ({ id, first_name: `Member ${id}`, is_bot: false as const });
+    const group = (id: bigint) => ({ id: Number(id), type: 'supergroup' as const, title: 'Fixture group' });
+    const privateChat = (id: number) => ({ id, type: 'private' as const, first_name: 'Test member' });
+    const command = (text: string, user = 42, chatId?: bigint): Update => ({
+      update_id: ++updateId,
+      message: {
+        message_id: ++messageId, date: 1, from: from(user), text,
+        chat: chatId === undefined ? privateChat(user) : group(chatId),
+        entities: [{ type: 'bot_command', offset: 0, length: text.split(' ')[0]!.length }],
+      },
+    });
+    const callback = (data: string, user = 42, message = 1, chatId?: bigint): Update => ({
+      update_id: ++updateId,
+      callback_query: {
+        id: String(updateId), chat_instance: 'test', data, from: from(user),
+        message: { message_id: message, date: 1, text: 'Fixture',
+          chat: chatId === undefined ? privateChat(user) : group(chatId) },
+      },
+    });
+    const post = (feature: string, input: unknown, user = 42, target: AppConfig = test) =>
+      fetch(`http://127.0.0.1:${target.miniAppPort}/api/${feature}`, {
+        method: 'POST', headers: { Authorization: `tma ${signedInitData(user)}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify(input),
+      });
+    const messagesTo = (chat: string | number, method: 'sendMessage' | 'editMessageText') =>
+      calls.mock.calls.filter(([name, data]) => name === method && String((data as { chat_id: unknown }).chat_id) === String(chat));
+    const future = { date: '2090-01-02', time: '13:30', timeZone: 'Asia/Yangon' };
+    const before = () => new Date('2090-01-01T01:00:00.000Z');
+    const birthday = (scope: bigint) => ({ groupId: scope, memberId: 42n, preview: false });
+    try {
+      await verifyDatabaseScope(db, test);
+      await registerTestScope(db, bot.telegram, test);
+      await expect(verifyDatabaseScope(db, { ...original, groupId })).rejects.toMatchObject({ code: 'ORIGINAL_GROUP_IS_TEST_ONLY' });
+
+      await server.listen();
+      await originalServer.listen();
+      expect((await post('dashboard', undefined, 86, original)).status).toBe(200);
+      for (const user of [42, 73, 84]) expect((await post('dashboard', undefined, user, original)).status).toBe(200);
+
+      const oldBillInput = createBillInput.parse({
+        requestId: randomUUID(), title: 'Original bill', total: '10000',
+        receiverId: '86', method: 'EQUAL', participants: [{ memberId: '73' }, { memberId: '86' }],
+      });
+      const oldBill = await createBill(db, bot.telegram, originalGroupId, 42n, oldBillInput);
+      const oldShare = await db.groupBillShare.findFirstOrThrow({ where: { billId: oldBill.id, memberId: 73n } });
+      const oldPayment = await submitPayment(db, originalGroupId, 73n, oldShare.id, { requestId: randomUUID(), method: 'CASH' });
+      await db.birthday.create({ data: { ...birthday(originalGroupId), month: 2, day: 28 } });
+      const oldPlan = (await handleCountdownAction({
+        action: 'create', ...future, requestId: randomUUID(), title: 'Original plan',
+      }, 42n, original, db, before)).body;
+      const oldHangout = (await handleHangoutAction({
+        action: 'create', ...future, requestId: randomUUID(), title: 'Original hangout', place: 'Park',
+      }, { id: 42n, name: 'Owner', receivedAt: before() }, original, db, before)).body;
+      if (!('plan' in oldPlan) || !oldPlan.plan || !('hangout' in oldHangout) || !oldHangout.hangout) {
+        throw new Error('Original fixtures did not save.');
+      }
+
+      calls.mockClear();
+      expect((await post('dashboard', undefined, 73)).status).toBe(403);
+      await bot.handleUpdate(command('/test_allow 73', 84));
+      await bot.handleUpdate(command('/test_allow 73', 42, originalGroupId));
+      await bot.handleUpdate(command('/test_group', 42, originalGroupId));
+      await bot.handleUpdate(command('/start', 42, originalGroupId));
+      await bot.handleUpdate(command('/start', 85, groupId));
+      await disabled.handleUpdate(command('/test_group', 42, groupId));
+      expect(calls).not.toHaveBeenCalled();
+      for (const id of [73, 84, 85]) await bot.handleUpdate(command(`/test_allow ${id}`));
+      groupMembers.delete(85);
+      expect((await post('dashboard', undefined, 85)).status).toBe(403);
+      expect((await post('dashboard', undefined, 86)).status).toBe(403);
+      await bot.handleUpdate(command('/test_group', 73, groupId));
+      expect(messagesTo(String(groupId), 'sendMessage')).toHaveLength(0);
+      await bot.handleUpdate(command('/test_group', 42, groupId));
+      await bot.handleUpdate(command('/start', 73, groupId));
+      const entryMessages = messagesTo(String(groupId), 'sendMessage');
+      expect(entryMessages.map(([, payload]) => payload)).toEqual([
+        expect.objectContaining({ text: expect.stringContaining('PRELAUNCH') }),
+        expect.objectContaining({ text: 'Open the private bot chat to access the group dashboard.' }),
+      ]);
+      expect(await (await post('dashboard', undefined, 73)).json()).toMatchObject({ preview: false, testGroup: true });
+      const roster = await (await post('bills', { action: 'roster' })).json();
+      expect(roster.roster.map(({ id }: { id: string }) => id)).toEqual(['42', '73', '84']);
+
+      for (const [kind, endpoint, key, options] of [
+        ['poll', 'smart-polls', 'options', ['Tea', 'Coffee']],
+        ['bv', 'budget-votes', 'amounts', ['10000', '9007199254740993']],
+      ] as const) {
+        const saved = { requestId: randomUUID(), question: `Test ${kind}`, [key]: options };
+        const originalResponse = await post(endpoint, { ...saved, question: `Original ${kind}` }, 42, original);
+        expect(originalResponse.status).toBe(201);
+        const oldId = (await originalResponse.json()).id;
+        calls.mockClear();
+        await bot.handleUpdate(callback(`${kind}:publish:${oldId}`));
+        expect(messagesTo(String(groupId), 'sendMessage')).toHaveLength(0);
+        const first = await post(endpoint, saved);
+        expect(first.status).toBe(201);
+        const { id } = await first.json();
+        expect(id).not.toBe(oldId);
+        expect(await (await post(endpoint, saved)).json()).toMatchObject({ id, created: false });
+        await bot.handleUpdate(callback(`vote:${kind}:mine:0`));
+        expect(messagesTo(42, 'editMessageText')[0]?.[1]).toMatchObject({ reply_markup: {
+          inline_keyboard: expect.arrayContaining([[expect.objectContaining({ text: saved.question })]]),
+        } });
+        expect(JSON.stringify(messagesTo(42, 'editMessageText'))).not.toContain(`Original ${kind}`);
+        await disabled.handleUpdate(callback(`${kind}:publish:${id}`));
+        expect(messagesTo(String(groupId), 'sendMessage')).toHaveLength(0);
+        await Promise.all([bot.handleUpdate(callback(`${kind}:publish:${id}`)), bot.handleUpdate(callback(`${kind}:publish:${id}`))]);
+        expect(messagesTo(String(groupId), 'sendMessage')).toHaveLength(1);
+        const found = kind === 'poll' ? await db.smartPoll.findUniqueOrThrow({ where: { id } }) :
+          await db.budgetVote.findUniqueOrThrow({ where: { id } });
+        expect(found.groupId).toBe(groupId);
+        const originalDraft = kind === 'poll' ? await db.smartPoll.findUnique({ where: { id: oldId } }) :
+          await db.budgetVote.findUnique({ where: { id: oldId } });
+        expect(originalDraft).toMatchObject({ groupId: originalGroupId, status: 'DRAFT', telegramMessageId: null });
+        const mid = found.telegramMessageId!;
+        const detail = () => post('votes', { action: 'detail', kind, id }, 73).then((response) => response.json());
+        await bot.handleUpdate(callback(`gv:${kind}:${id}:0`, 73, mid, originalGroupId));
+        expect(await detail()).toMatchObject({ total: 0 });
+        await bot.handleUpdate(callback(`gv:${kind}:${id}:0`, 73, mid, groupId));
+        expect(await detail()).toMatchObject({ mask: 1, total: 1 });
+        expect((await post('votes', { action: 'submit', kind, id, mask: 2 }, 73)).status).toBe(200);
+        await refreshGroupMessages(db, bot.telegram, test, 'test_bot');
+        expect(messagesTo(String(groupId), 'editMessageText').at(-1)?.[1]).toMatchObject({ message_id: mid });
+        const result = await detail();
+        expect(result).toMatchObject({ mask: 2, total: 1 });
+        if (kind === 'bv') expect(result.choices[1].label).toBe('9,007,199,254,740,993 MMK');
+        expect(calls.mock.calls.some(([, data]) => String((data as { chat_id?: string })?.chat_id) === String(originalGroupId))).toBe(false);
+      }
+
+      const billResponse = await post('bills', { action: 'create', bill: {
+        ...oldBillInput, title: 'Test bill', requestId: randomUUID(), receiverId: '84', total: '10000',
+        participants: [{ memberId: '73' }, { memberId: '84' }],
+      } });
+      expect(billResponse.status).toBe(200);
+      const { id: billId } = await billResponse.json();
+      expect((await post('bills', { action: 'bill', id: oldBill.id }, 73)).status).toBe(404);
+      await deliverBills(db, bot.telegram, test, 'test_bot');
+      const billDelivery = await db.billDelivery.findUniqueOrThrow({ where: { billId } });
+      expect(billDelivery.status).toBe('SENT');
+      const share = await db.groupBillShare.findFirstOrThrow({ where: { billId, memberId: 73n } });
+      expect((await post('bills', { action: 'later', share: share.id }, 73)).status).toBe(200);
+      const image = await sharp({ create: { width: 20, height: 20, channels: 3, background: 'teal' } }).png().toBuffer();
+      const paymentResponse = await post('bills', {
+        action: 'submit', share: share.id, requestId: randomUUID(), method: 'TRANSFER', image: image.toString('base64'),
+      }, 73);
+      expect(paymentResponse.status).toBe(200);
+      const { id: payment } = await paymentResponse.json();
+      expect((await post('bills', { action: 'proof', payment }, 42)).status).toBe(404);
+      expect((await post('bills', { action: 'proof', payment }, 85)).status).toBe(403);
+      expect((await post('bills', { action: 'proof', payment }, 84)).headers.get('content-type')).toBe('image/jpeg');
+      await bot.handleUpdate(command('/test_revoke 84'));
+      await deliverBills(db, bot.telegram, test, 'test_bot');
+      expect(messagesTo(84, 'sendMessage')).toHaveLength(0);
+      expect((await post('bills', { action: 'proof', payment }, 84)).status).toBe(403);
+      await bot.handleUpdate(command('/test_allow 84'));
+      expect((await post('bills', { action: 'review', payment, share: share.id, decision: 'CONFIRMED' }, 84)).status).toBe(200);
+      await refreshGroupMessages(db, bot.telegram, test, 'test_bot');
+      expect(messagesTo(String(groupId), 'editMessageText').at(-1)?.[1]).toMatchObject({
+        message_id: billDelivery.telegramMessageId, text: expect.stringContaining('Paid'),
+      });
+      expect((await db.billDelivery.findUnique({ where: { billId: oldBill.id } }))?.status).toBe('QUEUED');
+      expect((await db.billDelivery.findUnique({ where: { paymentId: oldPayment.id } }))?.status).toBe('QUEUED');
+
+      for (const day of [28, 29]) expect((await post('birthdays', { action: 'save', month: 2, day })).status).toBe(200);
+      expect(await (await post('birthdays', { action: 'upcoming' })).json()).toMatchObject({
+        items: [expect.objectContaining({ name: 'Member 42' })],
+      });
+      const birthClock = () => new Date('2027-02-28T02:30:00Z');
+      const beforeBirths = messagesTo(String(groupId), 'sendMessage').length;
+      await Promise.all([deliverBirthdays(db, bot.telegram, test, birthClock), deliverBirthdays(db, bot.telegram, test, birthClock)]);
+      expect(messagesTo(String(groupId), 'sendMessage')).toHaveLength(beforeBirths + 1);
+      expect(await db.birthdayDelivery.count({ where: { groupId: originalGroupId } })).toBe(0);
+      expect((await db.birthday.findUnique({ where: { groupId_memberId_preview: birthday(originalGroupId) } }))?.day).toBe(28);
+
+      const createPlan = async (title: string) => (await (await post('countdowns', {
+        action: 'create', ...future, title, requestId: randomUUID(),
+      })).json()).plan;
+      const plan = await createPlan('Test plan');
+      const cancelled = await createPlan('Cancel this plan');
+      expect((await post('countdowns', { action: 'detail', id: oldPlan.plan.id })).status).toBe(404);
+      expect((await post('countdowns', { action: 'edit', ...future, title: 'Updated plan', id: plan.id, version: 1 })).status).toBe(200);
+      expect((await post('countdowns', { action: 'cancel', id: cancelled.id, version: 1 })).status).toBe(200);
+      const planJobs = await db.planCountdownDelivery.findMany({ where: { countdownId: plan.id, kind: { not: 'ANNOUNCEMENT' } } });
+      expect(planJobs.map(({ kind }) => kind).sort()).toEqual(['AT_START', 'DAY_BEFORE', 'HOUR_BEFORE', 'SIX_HOURS_BEFORE']);
+      for (const { scheduledAt } of planJobs.sort((a, b) => +a.scheduledAt - +b.scheduledAt)) {
+        await deliverCountdowns(db, bot.telegram, test, 'test_bot', () => scheduledAt);
+      }
+      expect(await db.planCountdownDelivery.count({ where: { countdownId: plan.id, status: 'SENT' } })).toBe(5);
+      expect(await db.planCountdownDelivery.count({ where: { countdownId: cancelled.id, status: 'SENT' } })).toBe(0);
+      expect(await db.planCountdownDelivery.count({ where: { countdownId: oldPlan.plan.id, status: 'QUEUED' } })).toBe(5);
+
+      const hangoutResponse = await post('hangouts', {
+        action: 'create', ...future, title: 'Test hangout', place: 'Park', requestId: randomUUID(),
+      });
+      expect(hangoutResponse.status).toBe(201);
+      const { hangout } = await hangoutResponse.json();
+      await deliverHangouts(db, bot.telegram, test, 'test_bot');
+      const invitation = await db.hangoutInvitation.findUniqueOrThrow({ where: { hangoutId: hangout.id } });
+      expect(invitation.status).toBe('SENT');
+      expect((await post('hangouts', { action: 'detail', id: oldHangout.hangout.id })).status).toBe(404);
+      await bot.handleUpdate(callback(`ho:g:${hangout.id}`, 73, invitation.messageId!, groupId));
+      expect((await (await post('hangouts', { action: 'detail', id: hangout.id }, 73)).json()).hangout.myRsvp).toBe('GOING');
+      expect((await post('hangouts', { action: 'rsvp', id: hangout.id, response: 'MAYBE' }, 84)).status).toBe(200);
+      expect((await post('hangouts', { action: 'rsvp', id: hangout.id, response: 'CANT' })).status).toBe(200);
+      await deliverHangouts(db, bot.telegram, test, 'test_bot');
+      expect(messagesTo(String(groupId), 'editMessageText').at(-1)?.[1]).toMatchObject({
+        message_id: invitation.messageId, text: expect.stringMatching(/Going: 1[\s\S]*Maybe: 1[\s\S]*: 1/),
+      });
+      expect((await db.hangoutInvitation.findUnique({ where: { hangoutId: oldHangout.hangout.id } }))?.status).toBe('QUEUED');
+      expect(messagesTo(String(originalGroupId), 'sendMessage')).toHaveLength(0);
+      expect(messagesTo(String(originalGroupId), 'editMessageText')).toHaveLength(0);
+      expect(messagesTo(86, 'sendMessage')).toHaveLength(0);
+      expect(JSON.stringify(await (await post('dashboard', undefined, 73)).json())).not.toContain('Original ');
+    } finally {
+      await server.close();
+      await originalServer.close();
       await db.$disconnect();
       vi.restoreAllMocks();
     }

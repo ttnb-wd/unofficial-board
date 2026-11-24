@@ -127,3 +127,39 @@ describe('parseEnvironment', () => {
     }
   });
 });
+
+
+describe('test group configuration', () => {
+  const settings = {
+    TELEGRAM_BOT_TOKEN: 'fixture',
+    TELEGRAM_GROUP_ID: '-10',
+    PRELAUNCH_OWNER_TELEGRAM_ID: '42',
+    DATABASE_URL: 'postgresql://postgres@127.0.0.1/unused',
+    MINI_APP_URL: 'https://board.example.com',
+  };
+
+  it('defaults off and keeps the original group active', () => {
+    expect(parseEnvironment({ ...settings, TEST_GROUP_ID: '-20' })).toMatchObject({ groupId: -10n, accessMode: 'PRELAUNCH' });
+    expect(parseEnvironment({ ...settings, TEST_GROUP_ID: '-20' }).testGroup).toBeUndefined();
+    expect(parseEnvironment({ ...settings, TEST_GROUP_ID: '-20', ACCESS_MODE: 'LIVE' })).toMatchObject({ groupId: -10n, accessMode: 'LIVE' });
+  });
+
+  it('selects the test group while retaining PRELAUNCH and the original ID', () => {
+    expect(parseEnvironment({ ...settings, TEST_GROUP_ENABLED: 'true', TEST_GROUP_ID: '-20' })).toMatchObject({
+      accessMode: 'PRELAUNCH', groupId: -20n, testGroup: { id: -20n, originalGroupId: -10n },
+    });
+  });
+
+  it.each([
+    [{ TEST_GROUP_ID: '-10' }, 'TEST_GROUP_ID'],
+    [{ TEST_GROUP_ENABLED: 'true' }, 'TEST_GROUP_ID'],
+    [{ TEST_GROUP_ENABLED: 'yes' }, 'TEST_GROUP_ENABLED'],
+    [{ TEST_GROUP_ID: '20' }, 'TEST_GROUP_ID'],
+    [{ TEST_GROUP_ID: '-9007199254740992' }, 'TEST_GROUP_ID'],
+    [{ ACCESS_MODE: 'LIVE', TEST_GROUP_ENABLED: 'true', TEST_GROUP_ID: '-20' }, 'TEST_GROUP_ENABLED'],
+    [{ TEST_GROUP_ENABLED: 'true', TEST_GROUP_ID: '-20', MINI_APP_URL: 'https://fixture.trycloudflare.com' }, 'MINI_APP_URL'],
+    [{ TEST_GROUP_ENABLED: 'true', TEST_GROUP_ID: '-20', MINI_APP_URL: 'https://localhost' }, 'MINI_APP_URL'],
+  ])('rejects invalid or unsafe overrides %j', (overrides, invalid) => {
+    expect(() => parseEnvironment({ ...settings, ...overrides })).toThrow(invalid);
+  });
+});

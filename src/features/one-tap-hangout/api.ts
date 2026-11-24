@@ -1,3 +1,4 @@
+import { isOwnerPreview } from '../../access/policy.js';
 import type { Prisma, PrismaClient } from '@prisma/client';
 import { z } from 'zod';
 import type { AppConfig } from '../../config.js';
@@ -28,7 +29,7 @@ export async function handleHangoutAction(
   const parsed = actions.safeParse(input);
   if (!parsed.success) return reject(400, 'Check the hangout details and use Yangon time.');
   const action = parsed.data;
-  const preview = config.accessMode === 'PRELAUNCH';
+  const preview = isOwnerPreview(config);
   const ok = <T extends object>(body: T) => ({ status: 200, body: { ...body, serverNow: clock().toISOString() } });
   if (preview && actor.id !== config.prelaunchOwnerId) return reject(403, 'Owner access is required.');
   if (action.action === 'session') return ok({ preview });

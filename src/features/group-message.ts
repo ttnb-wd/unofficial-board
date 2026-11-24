@@ -1,3 +1,4 @@
+import { allowsGroupWorkflows, groupDestination } from '../access/policy.js';
 import type { PrismaClient } from '@prisma/client';
 import { Markup, TelegramError } from 'telegraf';
 import type { Telegram } from 'telegraf';
@@ -36,12 +37,12 @@ export function billMessage(bill: Parameters<typeof announcement>[0] & { id: str
   };
 }
 
-async function refresh(telegram: Telegram, groupId: bigint, messageId: number,
+async function refresh(telegram: Telegram, config: AppConfig, groupId: bigint, messageId: number,
   content: ReturnType<typeof voteMessage> | ReturnType<typeof billMessage>, now: Date,
 ) {
   type Signal = NonNullable<NonNullable<Parameters<Telegram['callApi']>[2]>['signal']>;
   try {
-    await telegram.callApi('editMessageText', { chat_id: String(groupId), message_id: messageId, ...content },
+    await telegram.callApi('editMessageText', { chat_id: groupDestination(config, groupId), message_id: messageId, ...content },
       { signal: AbortSignal.timeout(8_000) as unknown as Signal });
     return null;
   } catch (error) {
@@ -52,7 +53,8 @@ async function refresh(telegram: Telegram, groupId: bigint, messageId: number,
 }
 
 export async function refreshGroupMessages(db: PrismaClient, telegram: Telegram, config: AppConfig, username: string) {
-  if (config.accessMode !== 'LIVE') return;
+  if (!allowsGroupWorkflows(config)) return;
+  groupDestination(config, config.groupId);
   const now = new Date();
   const groupId = config.groupId;
   const where = { ...publishedVotes(groupId), groupSyncAt: { lte: now } };
@@ -60,7 +62,7 @@ export async function refreshGroupMessages(db: PrismaClient, telegram: Telegram,
   const [polls, budgets, bills] = await Promise.all([
     db.smartPoll.findMany({ where: { ...where, telegramPollId: null }, select, take: 5, orderBy: { groupSyncAt: 'asc' } }),
     db.budgetVote.findMany({ where, select, take: 5, orderBy: { groupSyncAt: 'asc' } }),
-    db.billDelivery.findMany({ where: { bill: { groupId }, status: 'SENT', groupSyncAt: { lte: now } },
+    db.billDelivery.findMany({ where: { bill: { groupId }, paymentId: null, status: 'SENT', groupSyncAt: { lte: now } },
       select, take: 5, orderBy: { groupSyncAt: 'asc' } }),
   ]);
   const limits = { maxWait: 10_000, timeout: 15_000 };
@@ -69,12 +71,12 @@ export async function refreshGroupMessages(db: PrismaClient, telegram: Telegram,
   for (const { id, kind } of votes) {
     await db.$transaction(async (tx) => {
       const locked = kind === 'poll'
-        ? await tx.$queryRaw<{ id: string }[]>`SELECT id FROM "SmartPoll" WHERE id = ${id} AND "groupSyncAt" <= ${now} FOR UPDATE SKIP LOCKED`
-        : await tx.$queryRaw<{ id: string }[]>`SELECT id FROM "BudgetVote" WHERE id = ${id} AND "groupSyncAt" <= ${now} FOR UPDATE SKIP LOCKED`;
+        ? await tx.$queryRaw<{ id: string }[]>`SELECT id FROM "SmartPoll" WHERE id = ${id} AND "groupId" = ${groupId} AND "groupSyncAt" <= ${now} FOR UPDATE SKIP LOCKED`
+        : await tx.$queryRaw<{ id: string }[]>`SELECT id FROM "BudgetVote" WHERE id = ${id} AND "groupId" = ${groupId} AND "groupSyncAt" <= ${now} FOR UPDATE SKIP LOCKED`;
       if (!locked.length) return;
       const vote = await readVoteRecord(tx, groupId, kind, id);
       const groupSyncAt = vote?.custom && canViewPublished(config, vote) && vote.telegramMessageId !== null
-        ? await refresh(telegram, groupId, vote.telegramMessageId, voteMessage(kind, vote, username), new Date())
+        ? await refresh(telegram, config, vote.groupId, vote.telegramMessageId, voteMessage(kind, vote, username), new Date())
         : null;
       if (kind === 'poll') await tx.smartPoll.update({ where: { id }, data: { groupSyncAt } });
       else await tx.budgetVote.update({ where: { id }, data: { groupSyncAt } });
@@ -82,14 +84,17 @@ export async function refreshGroupMessages(db: PrismaClient, telegram: Telegram,
   }
   for (const { id } of bills) {
     await db.$transaction(async (tx) => {
-      const locked = await tx.$queryRaw<{ id: string }[]>`SELECT id FROM "BillDelivery" WHERE id = ${id} AND "groupSyncAt" <= ${now} FOR UPDATE SKIP LOCKED`;
+      const locked = await tx.$queryRaw<{ id: string }[]>`
+        SELECT d.id FROM "BillDelivery" d JOIN "GroupBill" b ON b.id = d."billId"
+        WHERE d.id = ${id} AND b."groupId" = ${groupId} AND d."paymentId" IS NULL AND d."groupSyncAt" <= ${now}
+        FOR UPDATE OF d SKIP LOCKED`;
       if (!locked.length) return;
       const delivery = await tx.billDelivery.findFirst({
-        where: { id, status: 'SENT', bill: { groupId } },
+        where: { id, status: 'SENT', paymentId: null, bill: { groupId } },
         include: { bill: { include: { shares: { orderBy: { memberId: 'asc' } } } } },
       });
       if (!delivery?.bill || delivery.telegramMessageId === null) return;
-      const groupSyncAt = await refresh(telegram, groupId, delivery.telegramMessageId, billMessage(delivery.bill, username), new Date());
+      const groupSyncAt = await refresh(telegram, config, delivery.bill.groupId, delivery.telegramMessageId, billMessage(delivery.bill, username), new Date());
       await tx.billDelivery.update({ where: { id }, data: { groupSyncAt } });
     }, limits);
   }

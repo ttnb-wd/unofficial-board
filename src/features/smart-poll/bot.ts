@@ -1,10 +1,11 @@
+import { allowsGroupWorkflows, groupDestination } from '../../access/policy.js';
 import type { PrismaClient } from '@prisma/client';
 import type { Telegraf } from 'telegraf';
 import { navigationRow, showScreen } from '../../bot/navigation.js';
 import { Markup } from 'telegraf';
 import type { Context } from 'telegraf';
 import type { AppConfig } from '../../config.js';
-import { verifyAndRecordMembership } from '../../access/membership.js';
+import { canAccessBoard } from '../../access/membership.js';
 import type { createLogger } from '../../logger.js';
 import { registerSmartPollMiniAppLaunch } from './native-form.js';
 
@@ -24,7 +25,7 @@ export function registerSmartPollHandlers(
   registerSmartPollMiniAppLaunch(bot, config, authorize);
 
   bot.action(/^poll:close:([a-z0-9]+)$/, async (ctx) => {
-    if (config.accessMode !== 'LIVE' || !(await authorize(ctx)) || !ctx.from) {
+    if (!allowsGroupWorkflows(config) || !(await authorize(ctx)) || !ctx.from) {
       await ctx.answerCbQuery('Authorized access is required.', {
         show_alert: true,
       });
@@ -66,7 +67,7 @@ export function registerSmartPollHandlers(
       }
       try {
         await ctx.telegram.stopPoll(
-          config.groupId.toString(),
+          groupDestination(config, poll.groupId),
           poll.telegramMessageId,
         );
       } catch (error) {
@@ -91,24 +92,26 @@ export function registerSmartPollHandlers(
   });
 
   bot.on('poll_answer', async (ctx) => {
+    if (!allowsGroupWorkflows(config)) return;
     const answer = ctx.update.poll_answer;
     const user = answer.user;
     if (!user) {
       return;
     }
     const poll = await database.smartPoll.findUnique({
-      where: { telegramPollId: answer.poll_id },
+      where: { telegramPollId: answer.poll_id, groupId: config.groupId },
       include: { options: { orderBy: { position: 'asc' } } },
     });
     if (!poll || poll.groupId !== config.groupId || poll.isPrelaunchTest || poll.status !== 'OPEN' || poll.isAnonymous) {
       return;
     }
     try {
-      const active = await verifyAndRecordMembership(
+      const active = await canAccessBoard(
         ctx.telegram,
         database,
-        config.groupId,
+        config,
         BigInt(user.id),
+        false,
       );
       if (!active) {
         return;
@@ -122,7 +125,7 @@ export function registerSmartPollHandlers(
       await database.$transaction(async (transaction) => {
         const locked = await transaction.$queryRaw<{ id: string }[]>`
           SELECT "id" FROM "SmartPoll"
-          WHERE "id" = ${poll.id} AND "status" = 'OPEN' FOR UPDATE
+          WHERE "id" = ${poll.id} AND "groupId" = ${config.groupId} AND "status" = 'OPEN' FOR UPDATE
         `;
         if (!locked.length) return;
         await transaction.smartPollVote.deleteMany({
@@ -151,9 +154,10 @@ export function registerSmartPollHandlers(
   });
 
   bot.on('poll', async (ctx) => {
+    if (!allowsGroupWorkflows(config)) return;
     const incoming = ctx.update.poll;
     const poll = await database.smartPoll.findUnique({
-      where: { telegramPollId: incoming.id },
+      where: { telegramPollId: incoming.id, groupId: config.groupId },
     });
     if (!poll || poll.groupId !== config.groupId || poll.isPrelaunchTest) {
       return;

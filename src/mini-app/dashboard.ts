@@ -1,3 +1,4 @@
+import { isOwnerPreview } from '../access/policy.js';
 import type { PrismaClient } from '@prisma/client';
 import type { Telegram } from 'telegraf';
 import type { AppConfig } from '../config.js';
@@ -23,7 +24,7 @@ export async function readDashboard(
   telegram: Telegram,
   onError: (error: unknown) => void,
 ) {
-  const preview = config.accessMode === 'PRELAUNCH';
+  const preview = isOwnerPreview(config);
   const scope = { groupId: config.groupId, creatorId: actor.userId, isPrelaunchTest: preview };
   const voteScope = preview ? scope : publishedVotes(config.groupId);
   const recent = { orderBy: [{ createdAt: 'desc' as const }, { id: 'desc' as const }], take: 5 };
@@ -67,7 +68,7 @@ export async function readDashboard(
   ]);
 
   return {
-    preview, name: actor.name, birthday, plans, hangouts, birthdays, bills, debts,
+    preview, ...(config.testGroup ? { testGroup: true } : {}), name: actor.name, birthday, plans, hangouts, birthdays, bills, debts,
     polls: polls?.map(({ question, ...poll }) => ({ ...poll, title: question })) ?? null,
     budgets,
   };

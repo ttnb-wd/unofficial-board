@@ -1,3 +1,4 @@
+import { allowsGroupWorkflows, groupDestination } from '../../access/policy.js';
 import type { Hangout, HangoutInvitation, PrismaClient } from '@prisma/client';
 import { TelegramError } from 'telegraf';
 import type { Telegram } from 'telegraf';
@@ -39,7 +40,8 @@ function retryAfter(error: unknown, fallback: number) {
 }
 
 export async function deliverHangouts(db: PrismaClient, telegram: Telegram, config: AppConfig, username: string, clock = () => new Date()) {
-  if (config.accessMode !== 'LIVE') return;
+  if (!allowsGroupWorkflows(config)) return;
+  groupDestination(config, config.groupId);
   const now = clock();
   const hangout = { groupId: config.groupId };
   await db.hangoutInvitation.updateMany({
@@ -76,7 +78,7 @@ export async function deliverHangouts(db: PrismaClient, telegram: Telegram, conf
         let data = { syncAt: nextSync, syncAttempts: 0, unavailableAt: null as Date | null };
         try {
           await telegram.callApi('editMessageText', {
-            chat_id: String(config.groupId), message_id: job.messageId, ...content,
+            chat_id: groupDestination(config, event.groupId), message_id: job.messageId, ...content,
           }, timeout());
         } catch (error) {
           const code = error instanceof TelegramError ? error.code : undefined;
@@ -101,7 +103,7 @@ async function sendInvitation(
   db: PrismaClient, telegram: Telegram, config: AppConfig, username: string,
   event: Hangout & { responses: Parameters<typeof countsFor>[0] }, job: HangoutInvitation, clock: () => Date,
 ) {
-  const where = { hangoutId: event.id };
+  const where = { hangoutId: event.id, hangout: { groupId: config.groupId } };
   const attemptAt = clock();
   // Persist the claim on a second connection while the caller holds the event lock.
   const claimed = await db.hangoutInvitation.updateMany({
@@ -118,7 +120,7 @@ async function sendInvitation(
   let sent;
   try {
     sent = await telegram.callApi('sendMessage', {
-      chat_id: String(config.groupId), ...invitationContent(event, username, at),
+      chat_id: groupDestination(config, event.groupId), ...invitationContent(event, username, at),
     }, timeout());
   } catch (error) {
     const code = error instanceof TelegramError ? error.code : undefined;

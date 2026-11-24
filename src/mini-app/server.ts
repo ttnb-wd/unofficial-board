@@ -1,3 +1,4 @@
+import { allowsGroupWorkflows, isOwnerPreview } from '../access/policy.js';
 import { randomBytes } from 'node:crypto';
 import { createServer } from 'node:http';
 import type { IncomingMessage, Server, ServerResponse } from 'node:http';
@@ -7,8 +8,7 @@ import { fileURLToPath } from 'node:url';
 import type { Prisma, PrismaClient } from '@prisma/client';
 import { Telegram } from 'telegraf';
 import type { AppConfig } from '../config.js';
-import { verifyAndRecordMembership } from '../access/membership.js';
-import { hasPrelaunchAccess } from '../access/policy.js';
+import { canAccessBoard } from '../access/membership.js';
 import type { createLogger } from '../logger.js';
 import { handleBillAction } from '../features/bill-splitter/api.js';
 import { refreshGroupMessages } from '../features/group-message.js';
@@ -143,22 +143,7 @@ async function authorizeRequest(
     return null;
   }
 
-  if (config.accessMode === 'PRELAUNCH') {
-    return hasPrelaunchAccess(
-      config.accessMode,
-      config.prelaunchOwnerId,
-      user.id,
-    )
-      ? { userId: user.id, name: displayName(user) }
-      : null;
-  }
-
-  const isMember = await verifyAndRecordMembership(
-    telegram,
-    database,
-    config.groupId,
-    user.id,
-  );
+  const isMember = await canAccessBoard(telegram, database, config, user.id, true);
   return isMember ? { userId: user.id, name: displayName(user) } : null;
 }
 
@@ -207,7 +192,7 @@ async function createSubmission(
         id: saved.id,
         created: saved.created,
         status:
-          config.accessMode === 'PRELAUNCH'
+          isOwnerPreview(config)
             ? 'PRELAUNCH_PREVIEW'
             : 'DRAFT',
         message: 'Poll saved privately. Open My polls in the bot.',
@@ -253,7 +238,7 @@ async function createSubmission(
       id: saved.id,
       created: saved.created,
       status:
-        config.accessMode === 'PRELAUNCH'
+        isOwnerPreview(config)
           ? 'PRELAUNCH_OPEN'
           : 'DRAFT',
       message: 'Budget vote saved privately. Open My budget votes in the bot.',
@@ -297,28 +282,32 @@ type SubmissionRow = {
   creatorId: bigint;
   feature: 'SMART_POLL' | 'BUDGET_VOTE';
   resourceId: string;
+  groupId: bigint | null;
 };
 
 async function findExistingSubmission(
   transaction: Prisma.TransactionClient,
   requestId: string,
   userId: bigint,
+  groupId: bigint,
   feature: SubmissionRow['feature'],
 ): Promise<SavedSubmission | null> {
   await transaction.$executeRaw`
     SELECT pg_advisory_xact_lock(hashtextextended(${requestId}, 0))
   `;
   const rows = await transaction.$queryRaw<SubmissionRow[]>`
-    SELECT "creatorId", "feature", "resourceId"
-    FROM "MiniAppSubmission"
-    WHERE "requestId" = ${requestId}
-    FOR UPDATE
+    SELECT s."creatorId", s."feature", s."resourceId", COALESCE(p."groupId", b."groupId") AS "groupId"
+    FROM "MiniAppSubmission" s
+    LEFT JOIN "SmartPoll" p ON s."feature" = 'SMART_POLL' AND p."id" = s."resourceId" AND p."creatorId" = s."creatorId"
+    LEFT JOIN "BudgetVote" b ON s."feature" = 'BUDGET_VOTE' AND b."id" = s."resourceId" AND b."creatorId" = s."creatorId"
+    WHERE s."requestId" = ${requestId}
+    FOR UPDATE OF s
   `;
   const existing = rows[0];
   if (!existing) {
     return null;
   }
-  if (existing.creatorId !== userId || existing.feature !== feature) {
+  if (existing.creatorId !== userId || existing.feature !== feature || existing.groupId !== groupId) {
     throw new SubmissionConflictError();
   }
   return { id: existing.resourceId, created: false };
@@ -337,10 +326,12 @@ async function savePoll(
   let operation = 'idempotency-lock-and-lookup';
   try {
     return await database.$transaction(async (transaction) => {
+      const requestId = config.testGroup ? `test:${config.groupId}:${submission.requestId}` : submission.requestId;
       const existing = await findExistingSubmission(
         transaction,
-        submission.requestId,
+        requestId,
         userId,
+        config.groupId,
         'SMART_POLL',
       );
       if (existing) {
@@ -351,7 +342,7 @@ async function savePoll(
         where: { telegramId: config.groupId },
         create: {
           telegramId: config.groupId,
-          isPrelaunchTest: config.accessMode === 'PRELAUNCH',
+          isPrelaunchTest: isOwnerPreview(config),
         },
         update: {},
       });
@@ -360,7 +351,7 @@ async function savePoll(
         where: { telegramId: userId },
         create: {
           telegramId: userId,
-          isPrelaunchTest: config.accessMode === 'PRELAUNCH',
+          isPrelaunchTest: isOwnerPreview(config),
         },
         update: {},
       });
@@ -372,10 +363,10 @@ async function savePoll(
           question: submission.question,
           draftStep: 'SAVED',
           status:
-            config.accessMode === 'PRELAUNCH'
+            isOwnerPreview(config)
               ? 'PRELAUNCH_PREVIEW'
               : 'DRAFT',
-          isPrelaunchTest: config.accessMode === 'PRELAUNCH',
+          isPrelaunchTest: isOwnerPreview(config),
           options: {
             create: submission.options.map((text, position) => ({
               position,
@@ -388,7 +379,7 @@ async function savePoll(
       operation = 'record-idempotency-key';
       await transaction.$executeRaw`
         INSERT INTO "MiniAppSubmission" ("requestId", "feature", "creatorId", "resourceId")
-        VALUES (${submission.requestId}, 'SMART_POLL'::"MiniAppSubmissionFeature", ${userId}, ${poll.id})
+        VALUES (${requestId}, 'SMART_POLL'::"MiniAppSubmissionFeature", ${userId}, ${poll.id})
       `;
       return { id: poll.id, created: true };
     }, { isolationLevel: 'ReadCommitted', maxWait: 10_000, timeout: 30_000 });
@@ -417,10 +408,12 @@ async function saveBudgetVote(
   let operation = 'idempotency-lock-and-lookup';
   try {
     return await database.$transaction(async (transaction) => {
+      const requestId = config.testGroup ? `test:${config.groupId}:${submission.requestId}` : submission.requestId;
       const existing = await findExistingSubmission(
         transaction,
-        submission.requestId,
+        requestId,
         userId,
+        config.groupId,
         'BUDGET_VOTE',
       );
       if (existing) {
@@ -440,7 +433,7 @@ async function saveBudgetVote(
         where: { telegramId: config.groupId },
         create: {
           telegramId: config.groupId,
-          isPrelaunchTest: config.accessMode === 'PRELAUNCH',
+          isPrelaunchTest: isOwnerPreview(config),
         },
         update: {},
       });
@@ -449,7 +442,7 @@ async function saveBudgetVote(
         where: { telegramId: userId },
         create: {
           telegramId: userId,
-          isPrelaunchTest: config.accessMode === 'PRELAUNCH',
+          isPrelaunchTest: isOwnerPreview(config),
         },
         update: {},
       });
@@ -460,11 +453,11 @@ async function saveBudgetVote(
           creatorId: userId,
           title: submission.question,
           status:
-            config.accessMode === 'PRELAUNCH'
+            isOwnerPreview(config)
               ? 'PRELAUNCH_OPEN'
               : 'DRAFT',
           draftStep: 'SAVED',
-          isPrelaunchTest: config.accessMode === 'PRELAUNCH',
+          isPrelaunchTest: isOwnerPreview(config),
         },
         select: { id: true },
       });
@@ -481,7 +474,7 @@ async function saveBudgetVote(
       operation = 'record-idempotency-key';
       await transaction.$executeRaw`
         INSERT INTO "MiniAppSubmission" ("requestId", "feature", "creatorId", "resourceId")
-        VALUES (${submission.requestId}, 'BUDGET_VOTE'::"MiniAppSubmissionFeature", ${userId}, ${vote.id})
+        VALUES (${requestId}, 'BUDGET_VOTE'::"MiniAppSubmissionFeature", ${userId}, ${vote.id})
       `;
       return { id: vote.id, created: true, options };
     }, { isolationLevel: 'ReadCommitted', maxWait: 10_000, timeout: 30_000 });
@@ -566,26 +559,26 @@ export function createMiniAppServer(
   let pendingHangoutDelivery: Promise<void> | undefined;
   let closing = false;
   const wakeHangouts = () => {
-    if (closing || pendingHangoutDelivery || !botUsername || config.accessMode !== 'LIVE') return;
+    if (closing || pendingHangoutDelivery || !botUsername || !allowsGroupWorkflows(config)) return;
     pendingHangoutDelivery = deliverHangouts(database, telegram, config, botUsername)
       .catch((error: unknown) => logger.warn({ errorName: errorName(error) }, 'Hangout delivery worker failed'))
       .finally(() => { pendingHangoutDelivery = undefined; });
   };
   const kickCountdowns = () => {
-    if (closing || pendingCountdownDelivery || !botUsername || config.accessMode !== 'LIVE') return;
+    if (closing || pendingCountdownDelivery || !botUsername || !allowsGroupWorkflows(config)) return;
     pendingCountdownDelivery = deliverCountdowns(database, telegram, config, botUsername)
       .catch((error: unknown) => logger.warn({ errorName: errorName(error) }, 'Countdown delivery worker failed'))
       .finally(() => { pendingCountdownDelivery = undefined; });
   };
   const kick = () => {
-    if (closing || pendingDelivery || !botUsername || config.accessMode !== 'LIVE') return;
+    if (closing || pendingDelivery || !botUsername || !allowsGroupWorkflows(config)) return;
     pendingDelivery = deliverBills(database, telegram, config, botUsername)
       .then(() => refreshGroupMessages(database, telegram, config, botUsername))
       .catch((error: unknown) => logger.warn({ errorName: errorName(error) }, 'Bill delivery worker failed'))
       .finally(() => { pendingDelivery = undefined; });
   };
   const kickBirthdays = () => {
-    if (closing || pendingBirthdayDelivery || config.accessMode !== 'LIVE') return;
+    if (closing || pendingBirthdayDelivery || !allowsGroupWorkflows(config)) return;
     pendingBirthdayDelivery = deliverBirthdays(database, telegram, config)
       .catch((error: unknown) => logger.warn({ errorName: errorName(error) }, 'Birthday delivery worker failed'))
       .finally(() => { pendingBirthdayDelivery = undefined; });
@@ -801,7 +794,7 @@ export function createMiniAppServer(
         server.listen(config.miniAppPort ?? 3000, '0.0.0.0', () => {
           server.off('error', rejectListen);
           closing = false;
-          if (botUsername && config.accessMode === 'LIVE') {
+          if (botUsername && allowsGroupWorkflows(config)) {
             kick();
             wakeHangouts();
             deliveryTimer = setInterval(() => {
@@ -810,7 +803,7 @@ export function createMiniAppServer(
             }, 15_000);
             deliveryTimer.unref();
           }
-          if (config.accessMode === 'LIVE') {
+          if (allowsGroupWorkflows(config)) {
             kickBirthdays();
             kickCountdowns();
             birthdayTimer = setInterval(() => {

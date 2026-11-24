@@ -1,3 +1,4 @@
+import { isOwnerPreview } from '../../access/policy.js';
 import type { PrismaClient } from '@prisma/client';
 import type { Telegram } from 'telegraf';
 import { z } from 'zod';
@@ -31,7 +32,7 @@ export async function handleBillAction(body: unknown, actor: bigint, config: App
   const parsed = actions.safeParse(body);
   if (!parsed.success) throw new BillError(400, 'Check the submitted values and try again.');
   const input = parsed.data;
-  if (config.accessMode === 'PRELAUNCH') {
+  if (isOwnerPreview(config)) {
     if (actor !== config.prelaunchOwnerId) throw new BillError(403, 'Access denied.');
     if (input.action === 'session') return { preview: true, actor: '1', roster: previewRoster };
     throw new BillError(403, 'PRELAUNCH simulations run in the Mini App.');
@@ -40,9 +41,9 @@ export async function handleBillAction(body: unknown, actor: bigint, config: App
   const { groupId } = config;
   switch (input.action) {
     case 'session': return { preview: false, actor: String(actor) };
-    case 'roster': return { roster: await roster(db, telegram, groupId) };
+    case 'roster': return { roster: await roster(db, telegram, groupId, config) };
     case 'create': {
-      const result = await createBill(db, telegram, groupId, actor, input.bill);
+      const result = await createBill(db, telegram, groupId, actor, input.bill, config);
       kick();
       return result;
     }

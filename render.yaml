@@ -12,6 +12,10 @@ services:
         value: 22.x
       - key: ACCESS_MODE
         value: PRELAUNCH
+      - key: TEST_GROUP_ENABLED
+        value: 'false'
+      - key: TEST_GROUP_ID
+        sync: false
       - key: SERVE_MINI_APP
         value: 'false'
       - key: MINI_APP_URL

@@ -1,9 +1,10 @@
 import { createHash } from 'node:crypto';
 import type { Prisma, PrismaClient } from '@prisma/client';
+import type { AppConfig } from '../../config.js';
 import type { Telegram } from 'telegraf';
 import sharp from 'sharp';
 import { z } from 'zod';
-import { hasActiveMembership } from '../../access/membership.js';
+import { hasActiveMembership, testParticipantFilter } from '../../access/membership.js';
 import { BillError, calculateShares, createBillInput, maxProofBytes, outstanding } from './rules.js';
 
 const digest = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
@@ -20,9 +21,9 @@ async function currentMember(telegram: Telegram, groupId: bigint, id: bigint) {
   return { id: String(id), name: [...name].slice(0, 36).join('') || `Member ${id}` };
 }
 
-export async function roster(db: PrismaClient, telegram: Telegram, groupId: bigint) {
+export async function roster(db: PrismaClient, telegram: Telegram, groupId: bigint, config?: AppConfig) {
   const registered = await db.groupMembership.findMany({
-    where: { groupId, isPrelaunchTest: false }, select: { memberId: true }, orderBy: { memberId: 'asc' },
+    where: { groupId, isPrelaunchTest: false, ...(config && testParticipantFilter(config)) }, select: { memberId: true }, orderBy: { memberId: 'asc' },
   });
   const active = [];
   for (let index = 0; index < registered.length; index += 5) {
@@ -32,7 +33,7 @@ export async function roster(db: PrismaClient, telegram: Telegram, groupId: bigi
   return active;
 }
 
-export async function createBill(db: PrismaClient, telegram: Telegram, groupId: bigint, actor: bigint, input: RequestBill) {
+export async function createBill(db: PrismaClient, telegram: Telegram, groupId: bigint, actor: bigint, input: RequestBill, config?: AppConfig) {
   const shares = calculateShares(input);
   const requestHash = digest([input.title, String(input.total), input.receiverId, input.method,
     shares.map(({ memberId, amount }) => [String(memberId), String(amount)])]);
@@ -48,7 +49,7 @@ export async function createBill(db: PrismaClient, telegram: Telegram, groupId: 
   const receiverId = BigInt(input.receiverId);
   const ids = [...new Set([receiverId, ...shares.map(({ memberId }) => memberId)])];
   const registered = await db.groupMembership.findMany({
-    where: { groupId, memberId: { in: ids }, isPrelaunchTest: false }, select: { memberId: true },
+    where: { groupId, memberId: { in: ids }, isPrelaunchTest: false, ...(config && testParticipantFilter(config)) }, select: { memberId: true },
   });
   if (registered.length !== ids.length) throw new BillError(400, 'Each participant and payer must be a registered group member.');
   const names = new Map<bigint, string>();

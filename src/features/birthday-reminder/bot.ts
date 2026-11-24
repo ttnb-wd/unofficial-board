@@ -1,3 +1,4 @@
+import { isOwnerPreview } from '../../access/policy.js';
 import type { PrismaClient } from '@prisma/client';
 import { Markup } from 'telegraf';
 import type { Context, Telegraf } from 'telegraf';
@@ -14,7 +15,7 @@ export function registerBirthdayMenu(bot: Telegraf, config: AppConfig, db: Prism
     await ctx.answerCbQuery();
     const url = config.miniAppUrl ? new URL('/mini-app/birthday', config.miniAppUrl) : null;
     const ready = url?.protocol === 'https:';
-    const preview = config.accessMode === 'PRELAUNCH';
+    const preview = isOwnerPreview(config);
     const rows = [];
     if (ready) {
       const saved = await db.birthday.findUnique({

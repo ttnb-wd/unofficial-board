@@ -6,6 +6,12 @@ if (
   api?.protocol !== 'https:' ||
   api.username ||
   api.password ||
+  api.hostname === 'localhost' ||
+  api.hostname.endsWith('.localhost') ||
+  api.hostname.startsWith('127.') ||
+  api.hostname === '[::1]' ||
+  api.hostname === 'trycloudflare.com' ||
+  api.hostname.endsWith('.trycloudflare.com') ||
   value.replace(/\/$/, '') !== api.origin
 ) {
   throw new Error('Set MINI_APP_API_ORIGIN to the Render HTTPS origin, without a path.');

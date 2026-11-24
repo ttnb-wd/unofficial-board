@@ -1,3 +1,4 @@
+import { isOwnerPreview } from '../access/policy.js';
 import type { PrismaClient } from '@prisma/client';
 import { z } from 'zod';
 import type { AppConfig } from '../config.js';
@@ -17,7 +18,7 @@ const accept = <T>(body: T) => ({ status: 200, body });
 const pageSize = 10;
 
 async function list(database: PrismaClient, config: AppConfig, userId: bigint, kind: Kind, page: number) {
-  const preview = config.accessMode === 'PRELAUNCH';
+  const preview = isOwnerPreview(config);
   const where = preview
     ? { groupId: config.groupId, creatorId: userId, isPrelaunchTest: true, options: { some: { position: 1 } } }
     : publishedVotes(config.groupId);
@@ -56,7 +57,7 @@ export async function handleVoteAction(
   const parsed = actions.safeParse(body);
   if (!parsed.success) return reject(400, 'Choose a valid vote and selection.');
   const input = parsed.data;
-  const preview = config.accessMode === 'PRELAUNCH';
+  const preview = isOwnerPreview(config);
   if (preview && userId !== config.prelaunchOwnerId) return reject(403, 'Owner preview only.');
   if (input.action === 'list') {
     const result = await list(database, config, userId, input.kind, input.page);

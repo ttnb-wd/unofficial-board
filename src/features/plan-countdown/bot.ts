@@ -1,3 +1,4 @@
+import { isOwnerPreview } from '../../access/policy.js';
 import { Markup } from 'telegraf';
 import type { Context, Telegraf } from 'telegraf';
 import { navigationRow, showScreen } from '../../bot/navigation.js';
@@ -16,7 +17,7 @@ export function countdownKeyboard(config: AppConfig, id?: string) {
     if (id) rows.push(launch('View Countdown', 'detail'));
     else {
       rows.push(launch('Create Countdown', 'create'), launch('Upcoming Countdowns', 'upcoming'), launch('My Events', 'mine'), launch('Completed Events', 'completed'));
-      if (config.accessMode === 'PRELAUNCH') rows.push(launch('Preview Notifications', 'preview'), launch('Preview Member View', 'member'));
+      if (isOwnerPreview(config)) rows.push(launch('Preview Notifications', 'preview'), launch('Preview Member View', 'member'));
     }
   }
   return Markup.inlineKeyboard([...rows, navigationRow(id ? 'feature:plan-countdown' : 'nav:home')]);

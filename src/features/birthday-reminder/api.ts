@@ -1,6 +1,7 @@
+import { isOwnerPreview } from '../../access/policy.js';
 import type { PrismaClient } from '@prisma/client';
 import type { Telegram } from 'telegraf';
-import { hasActiveMembership } from '../../access/membership.js';
+import { hasActiveMembership, isTestParticipant } from '../../access/membership.js';
 import type { AppConfig } from '../../config.js';
 import { announcement, birthdayRequest, dateKey, nextOccurrence, yangonDate } from './rules.js';
 
@@ -13,7 +14,7 @@ export async function handleBirthdayAction(
   body: unknown, actorId: bigint, config: AppConfig, db: PrismaClient, telegram: Telegram, now = new Date(),
   upcomingLimit = Infinity,
 ) {
-  const preview = config.accessMode === 'PRELAUNCH';
+  const preview = isOwnerPreview(config);
   if (preview && actorId !== config.prelaunchOwnerId) {
     return { status: 403, body: { error: 'Owner preview only.' } };
   }
@@ -58,6 +59,7 @@ export async function handleBirthdayAction(
       const items = [];
       for (let offset = 0; offset < dates.length && items.length < upcomingLimit; offset += 5) {
         const verified = await Promise.all(dates.slice(offset, offset + 5).map(async ({ memberId, ...date }) => {
+          if (!await isTestParticipant(db, config, memberId)) return null;
           const member = await birthdayMember(telegram, config.groupId, memberId);
           return member ? { name: member.first_name, ...date } : null;
         }));

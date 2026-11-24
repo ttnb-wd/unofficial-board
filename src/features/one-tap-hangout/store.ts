@@ -1,3 +1,4 @@
+import { allowsGroupWorkflows } from '../../access/policy.js';
 import type { Hangout, HangoutRsvp, Prisma, PrismaClient } from '@prisma/client';
 import type { AppConfig } from '../../config.js';
 import { emptyCounts, eventStatus } from './rules.js';
@@ -40,7 +41,7 @@ export async function respondToHangout(
   db: PrismaClient, config: AppConfig, id: string, actor: Actor, response: HangoutRsvp,
   callback?: Callback, clock = () => new Date(),
 ) {
-  if (config.accessMode !== 'LIVE') return { status: 403, error: 'Live access is required.' };
+  if (!allowsGroupWorkflows(config)) return { status: 403, error: 'An active group is required.' };
   return db.$transaction(async (tx) => {
     await lockHangout(tx, id, config.groupId);
     const event = await tx.hangout.findFirst({
@@ -53,6 +54,10 @@ export async function respondToHangout(
     const now = clock();
     if (eventStatus(event.status, event.startsAt, now) !== 'OPEN') {
       return { status: 409, error: 'RSVP is closed.' };
+    }
+    if (config.testGroup && actor.id === config.prelaunchOwnerId &&
+        !await tx.groupMembership.findUnique({ where: { groupId_memberId: { groupId: config.groupId, memberId: actor.id } } })) {
+      return { status: 403, error: 'Join the test group before responding to invitations.' };
     }
     const key = { hangoutId: id, memberId: actor.id };
     const existing = await tx.hangoutResponse.findUnique({ where: { hangoutId_memberId: key } });

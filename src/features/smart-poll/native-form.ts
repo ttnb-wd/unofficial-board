@@ -1,3 +1,4 @@
+import { allowsGroupWorkflows, isOwnerPreview } from '../../access/policy.js';
 import type { PrismaClient } from '@prisma/client';
 import { Markup, Telegraf } from 'telegraf';
 import type { Context } from 'telegraf';
@@ -24,7 +25,7 @@ function createKeyboard(config: AppConfig) {
   return Markup.inlineKeyboard([
     ...(miniAppUrl ? [[Markup.button.webApp('Create Poll', miniAppUrl)]] : []),
     [Markup.button.callback('My polls', 'poll:list')],
-    ...(config.accessMode === 'LIVE'
+    ...(allowsGroupWorkflows(config)
       ? [[Markup.button.callback('Published votes', 'vote:poll:group')]]
       : [[Markup.button.callback('Member View Preview', 'vote:poll:samples')]]),
     navigationRow('nav:home'),
@@ -112,9 +113,9 @@ function parseOptions(value: string): string[] {
   return options;
 }
 
-async function loadPoll(database: PrismaClient, pollId: string, creatorId: bigint) {
+async function loadPoll(database: PrismaClient, config: AppConfig, pollId: string, creatorId: bigint) {
   return database.smartPoll.findFirst({
-    where: { id: pollId, creatorId },
+    where: { groupId: config.groupId, id: pollId, creatorId },
     include: { options: { orderBy: { position: 'asc' } } },
   });
 }
@@ -122,11 +123,12 @@ async function loadPoll(database: PrismaClient, pollId: string, creatorId: bigin
 async function showPollPrompt(
   ctx: Context,
   database: PrismaClient,
+  config: AppConfig,
   pollId: string,
   creatorId: bigint,
   text: string,
 ): Promise<void> {
-  const poll = await loadPoll(database, pollId, creatorId);
+  const poll = await loadPoll(database, config, pollId, creatorId);
   if (!poll || poll.status !== 'DRAFT') {
     await ctx.reply('This poll draft is no longer available.');
     return;
@@ -150,13 +152,13 @@ async function showPollPrompt(
   } else {
     const message = await ctx.reply(text, promptKeyboard(poll.id));
     await database.smartPoll.updateMany({
-      where: { id: poll.id, creatorId, status: 'DRAFT' },
+      where: { groupId: config.groupId, id: poll.id, creatorId, status: 'DRAFT' },
       data: { promptMessageId: message.message_id },
     });
     return;
   }
   await database.smartPoll.updateMany({
-    where: { id: poll.id, creatorId, status: 'DRAFT' },
+    where: { groupId: config.groupId, id: poll.id, creatorId, status: 'DRAFT' },
     data: { promptMessageId: messageId },
   });
 }
@@ -164,10 +166,11 @@ async function showPollPrompt(
 async function showPollPreview(
   ctx: Context,
   database: PrismaClient,
+  config: AppConfig,
   pollId: string,
   creatorId: bigint,
 ): Promise<void> {
-  const poll = await loadPoll(database, pollId, creatorId);
+  const poll = await loadPoll(database, config, pollId, creatorId);
   if (!poll) {
     await ctx.reply('This poll draft is no longer available.');
     return;
@@ -199,13 +202,13 @@ async function showPollPreview(
       previewKeyboard(poll.id, poll.options, saved),
     );
     await database.smartPoll.updateMany({
-      where: { id: poll.id, creatorId, status: poll.status },
+      where: { groupId: config.groupId, id: poll.id, creatorId, status: poll.status },
       data: { promptMessageId: message.message_id },
     });
     return;
   }
   await database.smartPoll.updateMany({
-    where: { id: poll.id, creatorId, status: poll.status },
+    where: { groupId: config.groupId, id: poll.id, creatorId, status: poll.status },
     data: { promptMessageId: messageId },
   });
 }
@@ -216,12 +219,12 @@ async function createOrResumeDraft(
   creatorId: bigint,
 ) {
   return database.$transaction(async (transaction) => {
-    const lockKey = `native-form:${creatorId}`;
+    const lockKey = `native-form:${config.groupId}:${creatorId}`;
     await transaction.$executeRaw`
       SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))
     `;
     const existing = await transaction.smartPoll.findFirst({
-      where: { creatorId, status: 'DRAFT' },
+      where: { groupId: config.groupId, creatorId, status: 'DRAFT' },
       include: { options: { orderBy: { position: 'asc' } } },
       orderBy: { updatedAt: 'desc' },
     });
@@ -232,7 +235,7 @@ async function createOrResumeDraft(
       where: { telegramId: config.groupId },
       create: {
         telegramId: config.groupId,
-        isPrelaunchTest: config.accessMode === 'PRELAUNCH',
+        isPrelaunchTest: isOwnerPreview(config),
       },
       update: {},
     });
@@ -240,7 +243,7 @@ async function createOrResumeDraft(
       where: { telegramId: creatorId },
       create: {
         telegramId: creatorId,
-        isPrelaunchTest: config.accessMode === 'PRELAUNCH',
+        isPrelaunchTest: isOwnerPreview(config),
       },
       update: {},
     });
@@ -248,7 +251,7 @@ async function createOrResumeDraft(
       data: {
         groupId: config.groupId,
         creatorId,
-        isPrelaunchTest: config.accessMode === 'PRELAUNCH',
+        isPrelaunchTest: isOwnerPreview(config),
       },
       include: { options: true },
     });
@@ -258,11 +261,12 @@ async function createOrResumeDraft(
 async function showCurrentDraft(
   ctx: Context,
   database: PrismaClient,
+  config: AppConfig,
   poll: NonNullable<Awaited<ReturnType<typeof loadPoll>>>,
   creatorId: bigint,
 ): Promise<void> {
   if (poll.draftStep === 'SAVED' || poll.draftStep === 'READY') {
-    await showPollPreview(ctx, database, poll.id, creatorId);
+    await showPollPreview(ctx, database, config, poll.id, creatorId);
   } else {
     const prompt =
       poll.draftStep === 'QUESTION' || poll.draftStep === 'EDIT_QUESTION'
@@ -270,7 +274,7 @@ async function showCurrentDraft(
         : poll.draftStep === 'ADD_OPTION'
           ? 'Send one option.'
           : 'Send the options, one per line.';
-    await showPollPrompt(ctx, database, poll.id, creatorId, prompt);
+    await showPollPrompt(ctx, database, config, poll.id, creatorId, prompt);
   }
 }
 
@@ -281,7 +285,7 @@ async function openPollDraft(
   creatorId: bigint,
 ): Promise<void> {
   const poll = await createOrResumeDraft(database, config, creatorId);
-  await showCurrentDraft(ctx, database, poll, creatorId);
+  await showCurrentDraft(ctx, database, config, poll, creatorId);
 }
 
 async function showStaleDraftNotice(ctx: Context): Promise<void> {
@@ -353,6 +357,7 @@ export function registerNativeSmartPollFormHandlers(
       const source = sourceId
         ? await database.budgetVote.findFirst({
             where: {
+              groupId: config.groupId,
               id: sourceId,
               creatorId: BigInt(ctx.from.id),
               status: 'DRAFT',
@@ -378,14 +383,14 @@ export function registerNativeSmartPollFormHandlers(
     }
     const pollId = ctx.match[1];
     const poll = pollId
-      ? await loadPoll(database, pollId, BigInt(ctx.from.id))
+      ? await loadPoll(database, config, pollId, BigInt(ctx.from.id))
       : null;
     if (!poll || poll.status !== 'DRAFT') {
       await showStaleDraftNotice(ctx);
       return;
     }
     await ctx.answerCbQuery();
-    await showCurrentDraft(ctx, database, poll, BigInt(ctx.from.id));
+    await showCurrentDraft(ctx, database, config, poll, BigInt(ctx.from.id));
   });
 
   bot.action(/^poll:(edit-question|edit-options|add-option):([a-z0-9]+)$/, async (ctx) => {
@@ -409,6 +414,7 @@ export function registerNativeSmartPollFormHandlers(
           : 'ADD_OPTION';
     const claimed = await database.smartPoll.updateMany({
       where: {
+        groupId: config.groupId,
         id: pollId,
         creatorId: BigInt(ctx.from.id),
         status: 'DRAFT',
@@ -426,6 +432,7 @@ export function registerNativeSmartPollFormHandlers(
     await showPollPrompt(
       ctx,
       database,
+      config,
       pollId,
       BigInt(ctx.from.id),
       action === 'edit-question'
@@ -445,7 +452,7 @@ export function registerNativeSmartPollFormHandlers(
     }
     const pollId = ctx.match[1];
     const poll = pollId
-      ? await loadPoll(database, pollId, BigInt(ctx.from.id))
+      ? await loadPoll(database, config, pollId, BigInt(ctx.from.id))
       : null;
     if (!poll || poll.status !== 'DRAFT' || poll.draftStep !== 'READY') {
       await ctx.answerCbQuery('This poll draft is no longer editable.', {
@@ -492,7 +499,7 @@ export function registerNativeSmartPollFormHandlers(
       const locked = await transaction.$queryRaw<{ id: string }[]>`
         SELECT "id"
         FROM "SmartPoll"
-        WHERE "id" = ${pollId}
+        WHERE "id" = ${pollId} AND "groupId" = ${config.groupId}
           AND "creatorId" = ${BigInt(ctx.from.id)}
           AND "status" = 'DRAFT'::"SmartPollStatus"
           AND "draftStep" = 'READY'::"SmartPollDraftStep"
@@ -503,6 +510,7 @@ export function registerNativeSmartPollFormHandlers(
       }
       const poll = await transaction.smartPoll.findFirst({
         where: {
+          groupId: config.groupId,
           id: pollId,
           creatorId: BigInt(ctx.from.id),
           status: 'DRAFT',
@@ -535,7 +543,7 @@ export function registerNativeSmartPollFormHandlers(
       return;
     }
     await ctx.answerCbQuery('Option removed.');
-    const updated = await loadPoll(database, pollId, BigInt(ctx.from.id));
+    const updated = await loadPoll(database, config, pollId, BigInt(ctx.from.id));
     if (!updated) {
       throw new Error('Poll draft could not be reloaded after removing an option.');
     }
@@ -557,7 +565,7 @@ export function registerNativeSmartPollFormHandlers(
       await ctx.answerCbQuery('This poll draft is invalid.', { show_alert: true });
       return;
     }
-    const poll = await loadPoll(database, pollId, BigInt(ctx.from.id));
+    const poll = await loadPoll(database, config, pollId, BigInt(ctx.from.id));
     if (!poll || poll.status !== 'DRAFT') {
       await ctx.answerCbQuery('This poll draft is no longer available.', {
         show_alert: true,
@@ -570,11 +578,11 @@ export function registerNativeSmartPollFormHandlers(
       poll.draftStep === 'ADD_OPTION'
     ) {
       await database.smartPoll.updateMany({
-        where: { id: poll.id, creatorId: BigInt(ctx.from.id), status: 'DRAFT' },
+        where: { groupId: config.groupId, id: poll.id, creatorId: BigInt(ctx.from.id), status: 'DRAFT' },
         data: { draftStep: 'READY' },
       });
       await ctx.answerCbQuery();
-      const updated = await loadPoll(database, poll.id, BigInt(ctx.from.id));
+      const updated = await loadPoll(database, config, poll.id, BigInt(ctx.from.id));
       if (updated) {
         await ctx.editMessageText(
           renderPreview(updated, updated.options),
@@ -594,6 +602,7 @@ export function registerNativeSmartPollFormHandlers(
     if (poll.draftStep === 'OPTIONS') {
       await database.smartPoll.updateMany({
         where: {
+          groupId: config.groupId,
           id: poll.id,
           creatorId: BigInt(ctx.from.id),
           status: 'DRAFT',
@@ -605,6 +614,7 @@ export function registerNativeSmartPollFormHandlers(
       await showPollPrompt(
         ctx,
         database,
+        config,
         poll.id,
         BigInt(ctx.from.id),
         'What’s the poll question?',
@@ -624,7 +634,7 @@ export function registerNativeSmartPollFormHandlers(
     }
     const pollId = ctx.match[1];
     const poll = pollId
-      ? await loadPoll(database, pollId, BigInt(ctx.from.id))
+      ? await loadPoll(database, config, pollId, BigInt(ctx.from.id))
       : null;
     if (
       !poll ||
@@ -638,9 +648,10 @@ export function registerNativeSmartPollFormHandlers(
       });
       return;
     }
-    const status = config.accessMode === 'PRELAUNCH' ? 'PRELAUNCH_PREVIEW' : 'DRAFT';
+    const status = isOwnerPreview(config) ? 'PRELAUNCH_PREVIEW' : 'DRAFT';
     const claimed = await database.smartPoll.updateMany({
       where: {
+        groupId: config.groupId,
         id: poll.id,
         creatorId: BigInt(ctx.from.id),
         status: 'DRAFT',
@@ -655,7 +666,7 @@ export function registerNativeSmartPollFormHandlers(
       return;
     }
     await ctx.answerCbQuery('Poll saved.');
-    if (config.accessMode === 'PRELAUNCH') {
+    if (isOwnerPreview(config)) {
       await ctx.editMessageText(
         `Saved privately. This poll has not been sent to the group.\n\n${renderPreview(poll, poll.options)}`,
         Markup.inlineKeyboard([
@@ -683,6 +694,7 @@ export function registerNativeSmartPollFormHandlers(
     const cancelled = pollId
       ? await database.smartPoll.updateMany({
           where: {
+            groupId: config.groupId,
             id: pollId,
             creatorId: BigInt(ctx.from.id),
             status: 'DRAFT',
@@ -713,6 +725,7 @@ export function registerNativeSmartPollFormHandlers(
     const creatorId = BigInt(ctx.from.id);
     const poll = await database.smartPoll.findFirst({
       where: {
+        groupId: config.groupId,
         creatorId,
         status: 'DRAFT',
         draftStep: {
@@ -724,6 +737,7 @@ export function registerNativeSmartPollFormHandlers(
     });
     const budget = await database.budgetVote.findFirst({
       where: {
+        groupId: config.groupId,
         creatorId,
         status: 'DRAFT',
         draftStep: { in: ['TITLE', 'RANGES'] },
@@ -743,6 +757,7 @@ export function registerNativeSmartPollFormHandlers(
         const nextStep = poll.draftStep === 'QUESTION' ? 'OPTIONS' : 'READY';
         const updated = await database.smartPoll.updateMany({
           where: {
+            groupId: config.groupId,
             id: poll.id,
             creatorId,
             status: 'DRAFT',
@@ -755,11 +770,12 @@ export function registerNativeSmartPollFormHandlers(
           return;
         }
         if (nextStep === 'READY') {
-          await showPollPreview(ctx, database, poll.id, creatorId);
+          await showPollPreview(ctx, database, config, poll.id, creatorId);
         } else {
           await showPollPrompt(
             ctx,
             database,
+            config,
             poll.id,
             creatorId,
             'Send the options, one per line.',
@@ -776,6 +792,7 @@ export function registerNativeSmartPollFormHandlers(
         const result = await database.$transaction(async (transaction) => {
           const claimed = await transaction.smartPoll.updateMany({
             where: {
+              groupId: config.groupId,
               id: poll.id,
               creatorId,
               status: 'DRAFT',
@@ -812,7 +829,7 @@ export function registerNativeSmartPollFormHandlers(
           await ctx.reply('This poll step has already been completed.');
           return;
         }
-        await showPollPreview(ctx, database, poll.id, creatorId);
+        await showPollPreview(ctx, database, config, poll.id, creatorId);
         return;
       }
 
@@ -820,6 +837,7 @@ export function registerNativeSmartPollFormHandlers(
       const result = await database.$transaction(async (transaction) => {
         const claimed = await transaction.smartPoll.updateMany({
           where: {
+            groupId: config.groupId,
             id: poll.id,
             creatorId,
             status: 'DRAFT',
@@ -846,7 +864,7 @@ export function registerNativeSmartPollFormHandlers(
         await ctx.reply('This poll step has already been completed.');
         return;
       }
-      await showPollPreview(ctx, database, poll.id, creatorId);
+      await showPollPreview(ctx, database, config, poll.id, creatorId);
     } catch (error) {
       if (error instanceof FormInputError) {
         await ctx.reply(error.message, promptKeyboard(poll.id));
